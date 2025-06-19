@@ -1,0 +1,23 @@
+#sdf_folder:
+  #type: PartitionedDataSet
+  #path: data/01_raw/sdf
+  #dataset:
+    #type: text.TextDataSet
+
+sdf_folder:
+  type: MemoryDataSet
+  data: data/01_raw/sdf
+
+csv_folder:
+  type: PartitionedDataSet
+  path: ./data/01_raw/csv/
+  dataset:
+    type: pandas.CSVDataSet
+
+tracker:
+  type: text.TextDataSet
+  filepath: ./data/01_raw/tracker.txt
+
+combined_csv:
+    type: pandas.CSVDataSet
+    filepath: ./data/03_primary/combined_output.csv
