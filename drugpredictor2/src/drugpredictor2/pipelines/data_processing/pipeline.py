@@ -13,8 +13,9 @@ def create_pipeline(**kwargs) -> Pipeline:
                 node(
                     func=sdf_to_csv,
                     inputs=["sdf_folder",
+                            "csv_folder",
                             'tracker'],
-                    outputs="csv_folder",
+                    outputs="tracker_updated",
                     name="sdf_to_csv_node",
                 ),
                 node(

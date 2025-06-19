@@ -14,7 +14,17 @@ csv_folder:
   dataset:
     type: pandas.CSVDataSet
 
+csv_folder_updated:
+  type: PartitionedDataSet
+  path: ./data/01_raw/csv/
+  dataset:
+    type: pandas.CSVDataSet
+
 tracker:
+  type: text.TextDataSet
+  filepath: ./data/01_raw/tracker.txt
+
+tracker_updated:
   type: text.TextDataSet
   filepath: ./data/01_raw/tracker.txt
 

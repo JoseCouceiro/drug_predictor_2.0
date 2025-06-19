@@ -5,14 +5,16 @@ import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import PandasTools, Descriptors
 
+"CAMBIA LA LÓGICA, EN VEZ DE SALVAR CSV INDIVIDUALES, SALVA SOLO UN CSV QUE SE CONCATENA AL YA EXISTENTE"
+
 def get_unprocessed_files(directory_path, tracker):
     #processed_files = set()
     
-    print('PATH: ', directory_path)
+    #print('PATH: ', directory_path)
     directory_path_list = directory_path.split('/')
-    print('LIST: ', directory_path_list)
+    #print('LIST: ', directory_path_list)
     directory_path_os = os.path.join(*directory_path_list)
-    print('DIR OS: ', directory_path_os)
+    #print('DIR OS: ', directory_path_os)
 
     all_files = [
     
@@ -20,23 +22,26 @@ def get_unprocessed_files(directory_path, tracker):
         for file in os.listdir(directory_path)
         if os.path.isfile(os.path.join(directory_path, file))
     ]
-    print('TRACKER: ', tracker, 'TYPE: ', type(tracker))
+    #print('TRACKER: ', tracker, 'TYPE: ', type(tracker))
     tracker_list = tracker.split('\n')
-    print('TRACKER_LIST: ', tracker_list)
-    print('ALL_FILES', all_files)
-    print('UNPROCESSED FILES: ', [(file, filepath) for (file, filepath) in all_files if file not in tracker_list])
+    #print('TRACKER_LIST: ', tracker_list)
+    #print('ALL_FILES', all_files)
+    #print('UNPROCESSED FILES: ', [(file, filepath) for (file, filepath) in all_files if file not in tracker_list])
     return [(file, filepath) for (file, filepath) in all_files if file not in tracker]
 
-def process_inputs(directory_path, tracker_path):
-    new_files = get_unprocessed_files(directory_path, tracker_path)
+def process_inputs(directory_path, tracker):
+    new_files = get_unprocessed_files(directory_path, tracker)
+    #print('NEW_FILES INSIDE PROCESS_INPUTS: ', new_files)
     # Update the tracker with processed files
     'tracker_path ya es el archivo, simplemente escribirlo y salvarlo'
-    with open(tracker_path, 'a') as f:
-        for (filename, filepath) in new_files:
-            f.write("\n"+filename)
+    #print('TRACKER: ', tracker)
+    for (filename, filepath) in new_files:
+        tracker_updated = tracker+'\n'+filename 
+    #print('TRACKER_UPDATED: ', tracker_updated)
+
     df_list = []
     for filename, file_path in new_files:
-        print('FILENAME: ', f'reading {filename}')
+        #print('FILENAME: ', f'reading {filename}')
         # Open the gzipped SDF file
         try:
             with gzip.open(file_path, 'rb') as gz:
@@ -48,7 +53,7 @@ def process_inputs(directory_path, tracker_path):
                 # Iterate over each molecule in the file
                 n = 1
                 for mol in supplier:
-                    print(n)
+                    #print(n)
                     n += 1
                     if mol is None:
                         continue
@@ -74,8 +79,8 @@ def process_inputs(directory_path, tracker_path):
 
         except Exception as e:
             print(f"Error reading the SDF file: {e}")
-    
-    return df_list
+
+    return df_list, tracker_updated
 
 
 def is_lipinski(x: pd.DataFrame) -> pd.DataFrame:
@@ -94,18 +99,27 @@ def is_lipinski(x: pd.DataFrame) -> pd.DataFrame:
     x['RuleFive'] = np.where(((hdonor & haccept & mw) | (hdonor & haccept & clogP) | (hdonor & mw & clogP) | (haccept & mw & clogP)), 1, 0)
     return x
 
-def save_sdf_as_csv(df_list: list, directory_path, tracker_path):
-    new_files = get_unprocessed_files(directory_path, tracker_path)
+def get_lipinski_dataframes(df_list: list, csv_folder, sdf_folder, tracker):
+    new_files = get_unprocessed_files(sdf_folder, tracker)
+    print('NEW FILES INSIDE GET LIPINSKI: ', new_files)
+    print('DF_LIST INSED GET_LIPINSKI: ', df_list)
     n = 0
+    df_lip_list = []
+    print('LEN_DF_LIST: ', len(df_list))
     for df in df_list:
         filename_for_csv = new_files[n][0].split('.')[0]
         df_lip = is_lipinski(df)
         n += 1
-        df_lip.to_csv(os.path.join(csv_path, filename_for_csv+'.csv'), index=None)
+        df_lip_list.append(df_lip)
+        df_lip.to_csv(os.path.join(csv_folder, filename_for_csv+'.csv'), index=None)
+    #return df_lip_list
         
-def sdf_to_csv(sdf_folder, tracker):
-    df_list = process_inputs(sdf_folder, tracker)
-    save_sdf_as_csv(df_list)
+def sdf_to_csv(sdf_folder, csv_folder, tracker):
+    df_list, tracker_updated = process_inputs(sdf_folder, tracker)
+    print('DF_LIST INSIDE SDF_TO_CSV: ', df_list)
+    df_lip_list = get_lipinski_dataframes(df_list, csv_folder, sdf_folder, tracker_updated)
+    for df_lip in df_lip_list:
+        return df_lip, tracker_updated
 
 # concat csv files in a combined csv
 """Cambiar esto para concadenar el combined_output con los nuevos csv.
