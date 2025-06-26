@@ -8,17 +8,25 @@ sdf_folder:
   type: MemoryDataSet
   data: data/01_raw/sdf
 
-csv_folder:
-  type: PartitionedDataSet
-  path: ./data/01_raw/csv/
-  dataset:
-    type: pandas.CSVDataSet
+#csv_folder:
+ # type: PartitionedDataSet
+  #path: ./data/01_raw/csv/
+  #dataset:
+   # type: pandas.CSVDataSet
 
-csv_folder_updated:
-  type: PartitionedDataSet
-  path: ./data/01_raw/csv/
-  dataset:
-    type: pandas.CSVDataSet
+#csv_folder_updated:
+ # type: PartitionedDataSet
+  #path: ./data/01_raw/csv/
+  #dataset:
+   # type: pandas.CSVDataSet
+
+combined_csv:
+  type: pandas.CSVDataSet
+  filepath: ./data/01_raw/csv/combined_output.csv
+
+combined_csv_updated:
+  type: pandas.CSVDataSet
+  filepath: ./data/01_raw/csv/combined_output.csv  
 
 tracker:
   type: text.TextDataSet

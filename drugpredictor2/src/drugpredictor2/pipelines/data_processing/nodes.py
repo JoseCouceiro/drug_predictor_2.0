@@ -9,47 +9,43 @@ from rdkit.Chem import PandasTools, Descriptors
 
 def get_unprocessed_files(directory_path, tracker):
     #processed_files = set()
-    
-    #print('PATH: ', directory_path)
     directory_path_list = directory_path.split('/')
     #print('LIST: ', directory_path_list)
     directory_path_os = os.path.join(*directory_path_list)
     #print('DIR OS: ', directory_path_os)
-
     all_files = [
-    
         (file, os.path.join(directory_path_os, file))
         for file in os.listdir(directory_path)
         if os.path.isfile(os.path.join(directory_path, file))
     ]
     #print('TRACKER: ', tracker, 'TYPE: ', type(tracker))
-    tracker_list = tracker.split('\n')
+    #tracker_list = tracker.split('\n')
     #print('TRACKER_LIST: ', tracker_list)
     #print('ALL_FILES', all_files)
     #print('UNPROCESSED FILES: ', [(file, filepath) for (file, filepath) in all_files if file not in tracker_list])
+    #returns a list of the tuples: (filename, filepath) with all the files not in tracker
+    #print([(file, filepath) for (file, filepath) in all_files if file not in tracker])
     return [(file, filepath) for (file, filepath) in all_files if file not in tracker]
 
-def process_inputs(directory_path, tracker):
+def update_tracker(directory_path, tracker):
     new_files = get_unprocessed_files(directory_path, tracker)
-    #print('NEW_FILES INSIDE PROCESS_INPUTS: ', new_files)
-    # Update the tracker with processed files
-    'tracker_path ya es el archivo, simplemente escribirlo y salvarlo'
-    #print('TRACKER: ', tracker)
     for (filename, filepath) in new_files:
-        tracker_updated = tracker+'\n'+filename 
-    #print('TRACKER_UPDATED: ', tracker_updated)
+        tracker +='\n'+filename
+    return tracker, new_files
 
+def process_inputs(directory_path, tracker):
+    #print('DIR PATH: ', directory_path)
+    #print('TRACKER: ', tracker)
+    tracker_updated, new_files = update_tracker(directory_path, tracker)
     df_list = []
     for filename, file_path in new_files:
-        #print('FILENAME: ', f'reading {filename}')
+        print('FILENAME: ', f'reading {filename}')
         # Open the gzipped SDF file
         try:
             with gzip.open(file_path, 'rb') as gz:
                 supplier = Chem.ForwardSDMolSupplier(gz)
-                
                 # Initialize a list to store data
                 data = []
-
                 # Iterate over each molecule in the file
                 n = 1
                 for mol in supplier:
@@ -57,11 +53,9 @@ def process_inputs(directory_path, tracker):
                     n += 1
                     if mol is None:
                         continue
-                    
                     try:
                         # Access molecule properties
                         properties = mol.GetPropsAsDict()
-                        
                         # Example: Add a specific property, add more as needed
                         data.append({
                             "SMILES": Chem.MolToSmiles(mol),
@@ -72,14 +66,13 @@ def process_inputs(directory_path, tracker):
                         })
                     except Exception as e:
                         print(f"Error processing molecule: {e}")
-
                 # Create a DataFrame from the list of dictionaries
                 df = pd.DataFrame(data)
                 df_list.append(df)
 
         except Exception as e:
             print(f"Error reading the SDF file: {e}")
-
+    print('OUTPUTS: ', df_list, tracker_updated)
     return df_list, tracker_updated
 
 
@@ -99,20 +92,14 @@ def is_lipinski(x: pd.DataFrame) -> pd.DataFrame:
     x['RuleFive'] = np.where(((hdonor & haccept & mw) | (hdonor & haccept & clogP) | (hdonor & mw & clogP) | (haccept & mw & clogP)), 1, 0)
     return x
 
-def get_lipinski_dataframes(df_list: list, csv_folder, sdf_folder, tracker):
-    new_files = get_unprocessed_files(sdf_folder, tracker)
-    print('NEW FILES INSIDE GET LIPINSKI: ', new_files)
-    print('DF_LIST INSED GET_LIPINSKI: ', df_list)
-    n = 0
+def get_lipinski_dataframes(sdf_folder, tracker):
+    df_list, tracker_updated = process_inputs(sdf_folder, tracker)
     df_lip_list = []
-    print('LEN_DF_LIST: ', len(df_list))
     for df in df_list:
-        filename_for_csv = new_files[n][0].split('.')[0]
         df_lip = is_lipinski(df)
-        n += 1
         df_lip_list.append(df_lip)
-        df_lip.to_csv(os.path.join(csv_folder, filename_for_csv+'.csv'), index=None)
-    #return df_lip_list
+    #print('OUTPUTS GET LIP: ', df_lip_list, tracker_updated)
+    return df_lip_list, tracker_updated
         
 def sdf_to_csv(sdf_folder, csv_folder, tracker):
     df_list, tracker_updated = process_inputs(sdf_folder, tracker)
@@ -127,7 +114,6 @@ Para ello hay que usar el tracker"""
 def concat_dataframes(csv_path):
     # List to store DataFrames
     dataframes = []
-
     # Iterate over files in the folder
     for file in os.listdir(csv_path):
         # Check if the file is a CSV
@@ -145,3 +131,12 @@ def concat_dataframes(csv_path):
     return combined_df
 
     print("CSV files concatenated successfully.")
+
+def update_dataframe(combined_csv, sdf_folder, tracker):
+    print('LOADED COMBINED: ', combined_csv)
+    df_lip_list, tracker_updated = get_lipinski_dataframes(sdf_folder, tracker)
+    print('DF_LIP_LIST IN UPDATE: ', df_lip_list)
+    print('TO CONCAT: ', [combined_csv]+df_lip_list)
+    combined_csv_updated = pd.concat([combined_csv]+df_lip_list, ignore_index=True)
+    print('COMBINED: ', combined_csv_updated)
+    return combined_csv_updated, tracker_updated
