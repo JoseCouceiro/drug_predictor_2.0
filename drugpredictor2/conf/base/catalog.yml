@@ -1,32 +1,8 @@
-#sdf_folder:
-  #type: PartitionedDataSet
-  #path: data/01_raw/sdf
-  #dataset:
-    #type: text.TextDataSet
+# data processing
 
 sdf_folder:
   type: MemoryDataSet
   data: data/01_raw/sdf
-
-#csv_folder:
- # type: PartitionedDataSet
-  #path: ./data/01_raw/csv/
-  #dataset:
-   # type: pandas.CSVDataSet
-
-#csv_folder_updated:
- # type: PartitionedDataSet
-  #path: ./data/01_raw/csv/
-  #dataset:
-   # type: pandas.CSVDataSet
-
-combined_csv:
-  type: pandas.CSVDataSet
-  filepath: ./data/01_raw/csv/combined_output.csv
-
-combined_csv_updated:
-  type: pandas.CSVDataSet
-  filepath: ./data/01_raw/csv/combined_output.csv  
 
 tracker:
   type: text.TextDataSet
@@ -37,5 +13,24 @@ tracker_updated:
   filepath: ./data/01_raw/tracker.txt
 
 combined_csv:
-    type: pandas.CSVDataSet
-    filepath: ./data/03_primary/combined_output.csv
+  type: pandas.CSVDataSet
+  filepath: ./data/03_primary/combined_output.csv
+
+combined_csv_updated:
+  type: pandas.CSVDataSet
+  filepath: ./data/03_primary/combined_output.csv
+
+combined_csv_mock:
+  type: pandas.CSVDataSet
+  filepath: ./data/03_primary/combined_output_mock.csv 
+
+# molecular calculations
+
+model_input:
+    type: pickle.PickleDataSet
+    filepath: data/05_model_input/input_table.pickle
+
+validation_dataset:
+    type: pickle.PickleDataSet
+    filepath: data/05_model_input/input_table_val.pickle
+

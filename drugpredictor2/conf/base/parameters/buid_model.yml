@@ -1,0 +1,10 @@
+X_y_split:
+  label: 
+    - 'RuleFive'
+  X: 
+    - 'SMILES'
+    - 'Morgan2FP'
+tune_model:
+  objective: 'val_loss'
+  max_trials : 5
+  date: '230714_09'
