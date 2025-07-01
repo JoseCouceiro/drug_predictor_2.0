@@ -5,7 +5,7 @@ def create_pipeline(**kwargs) -> Pipeline:
     return pipeline([
       node(
         func=get_model_input,
-        inputs=["combined_csv_mock", "params:size_validation_data"],
+        inputs=["combined_csv", "params:size_validation_data"],
         outputs=['validation_dataset', 'model_input'],
         name="get_model_input_node",
         )

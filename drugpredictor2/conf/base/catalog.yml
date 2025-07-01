@@ -22,7 +22,7 @@ combined_csv_updated:
 
 combined_csv_mock:
   type: pandas.CSVDataSet
-  filepath: ./data/03_primary/combined_output.csv 
+  filepath: ./data/03_primary/combined_output_mock.csv 
 
 # molecular calculations
 
@@ -30,9 +30,17 @@ model_input:
     type: pickle.PickleDataSet
     filepath: data/05_model_input/input_table.pickle
 
+model_input_mock:
+    type: pickle.PickleDataSet
+    filepath: data/05_model_input/input_table_mock.pickle
+
 validation_dataset:
     type: pickle.PickleDataSet
     filepath: data/05_model_input/input_table_val.pickle
+
+validation_dataset_mock:
+    type: pickle.PickleDataSet
+    filepath: data/05_model_input/input_table_val_mock.pickle
 
 # model
 
@@ -48,4 +56,34 @@ def_model:
 history:
     type: json.JSONDataSet
     filepath: data/06_models/history.json
+
+# evaluation
+
+train_predictions:
+    type: pickle.PickleDataSet
+    filepath: data/08_reporting/train_predictions.pickle
+
+train_classification_report:
+    type: text.TextDataSet
+    filepath: ./data/08_reporting/train_classification_report.txt 
+
+validation_predictions:
+    type: pickle.PickleDataSet
+    filepath: data/08_reporting/validation_predictions.pickle
+
+validation_classification_report:
+    type: text.TextDataSet
+    filepath: ./data/08_reporting/validation_classification_report.txt 
+
+training_fig:
+    type: matplotlib.MatplotlibWriter
+    filepath: data/08_reporting/training_fig.png
+    save_args:
+        format: png
+
+confussion_matrix_fig:
+    type: matplotlib.MatplotlibWriter
+    filepath: data/08_reporting/confussion_matrix.png
+    save_args:
+        format: png
 
