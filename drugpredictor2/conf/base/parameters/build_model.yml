@@ -1,9 +1,6 @@
 X_y_split:
-  label: 
-    - 'RuleFive'
-  X: 
-    - 'SMILES'
-    - 'Morgan2FP'
+  label: 'RuleFive'
+  X_column: 'Morgan2FP'
 tune_model:
   objective: 'val_loss'
   max_trials : 5

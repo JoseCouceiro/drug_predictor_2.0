@@ -1,4 +1,4 @@
-# Pipeline buid_model
+# Pipeline build_model
 
 > *Note:* This is a `README.md` boilerplate generated using `Kedro 0.18.10`.
 

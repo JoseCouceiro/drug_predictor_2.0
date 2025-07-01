@@ -5,6 +5,9 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit.Chem import PandasTools as pt
 
+"""IMPROVE: REMOVE THE WARNING FOR HIDROGEN BONDS"""
+"""CREAR UNA FUNCIÓN QUE ANOTE LA ÚLTIMA MOLÉCULA CON FP"""
+"""SALVAR COMO PARQUET, NO PICKLE"""
 # Function to obtain fingerprints
 
 def compute_morgan_fp(mol: Chem.Mol,
@@ -119,5 +122,4 @@ def get_model_input(
     validation_set, training_set = extract_validataion_dataset(
         combined_df_fingerprints, validation_percentage
         )
-    print(validation_set.head(), training_set.head())
     return validation_set, training_set

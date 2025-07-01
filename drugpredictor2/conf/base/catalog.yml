@@ -22,7 +22,7 @@ combined_csv_updated:
 
 combined_csv_mock:
   type: pandas.CSVDataSet
-  filepath: ./data/03_primary/combined_output_mock.csv 
+  filepath: ./data/03_primary/combined_output.csv 
 
 # molecular calculations
 
@@ -33,4 +33,19 @@ model_input:
 validation_dataset:
     type: pickle.PickleDataSet
     filepath: data/05_model_input/input_table_val.pickle
+
+# model
+
+def_model:
+    type: tensorflow.TensorFlowModelDataset
+    filepath: data/06_models/def_model.hd5
+    load_args:
+        compile: False
+    save_args:
+        save_format: h5
+        overwrite: True
+
+history:
+    type: json.JSONDataSet
+    filepath: data/06_models/history.json
 
