@@ -34,7 +34,9 @@ def compute_morgan_fp(mol: Chem.Mol,
 
 # Getting RDKit molecules
 
-def add_molecule_column(combined_df: pd.DataFrame) -> pd.DataFrame:
+def add_molecule_column(combined_df: pd.DataFrame,
+                        fp_tracker: str
+                        ) -> pd.DataFrame:
     """Adds an 'RDKit_Molecule' column to a DataFrame from a 'SMILES' column.
 
     This function uses RDKit's PandasTools to convert SMILES strings into
@@ -49,16 +51,22 @@ def add_molecule_column(combined_df: pd.DataFrame) -> pd.DataFrame:
     """
     base_column = 'SMILES'
     calculated_column = 'RDKit_Molecule'
+
+    # Process only new rows starting from the old value of n
+    subset_df = combined_df.iloc[int(fp_tracker):].copy()
+
     pt.AddMoleculeColumnToFrame(
-        frame=combined_df,
+        frame=subset_df,
         smilesCol=base_column,
         molCol=calculated_column
         )
-    return combined_df
+    return subset_df
 
 # Adding fingerprints to the dataframe
 
-def get_fingerprints(combined_df: pd.DataFrame) -> pd.DataFrame:
+def get_fingerprints(subset_df: pd.DataFrame,
+                     combined_df_w_fp: pd.DataFrame,
+                     fp_tracker: int) -> pd.DataFrame:
     """Computes Morgan fingerprints for each molecule in the DataFrame.
 
     This function maps the `compute_morgan_fp` function over the
@@ -71,13 +79,19 @@ def get_fingerprints(combined_df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         The DataFrame with a new 'Morgan2FP' column containing fingerprints.
     """
-    combined_df['Morgan2FP'] = combined_df['RDKit_Molecule'].map(compute_morgan_fp) 
-    return combined_df
+    calculated_column = 'RDKit_Molecule'
+    subset_df['Morgan2FP'] = subset_df['RDKit_Molecule'].map(compute_morgan_fp)
+    # Update the original DataFrame
+    combined_df_w_fp.loc[fp_tracker:, calculated_column] = subset_df[calculated_column]
+
+    
+    return combined_df_w_fp
 
 # Training and validation split
 
 def extract_validataion_dataset(
-        combined_df: pd.DataFrame, validation_percentage: int
+        combined_df: pd.DataFrame,
+        validation_percentage: int
         ) -> Tuple[pd.DataFrame,pd.DataFrame]:
     """Splits a DataFrame into training and validation sets.
 
@@ -99,7 +113,10 @@ def extract_validataion_dataset(
 # Combined functions
 
 def get_model_input(
-        combined_df: pd.DataFrame, validation_percentage: int
+        combined_df: pd.DataFrame,
+        combined_df_w_fp: pd.DataFrame,
+        validation_percentage: int,
+        fp_tracker: str
         ) -> Tuple[pd.DataFrame,pd.DataFrame]:
     """Prepares training and validation datasets for model input.
 
@@ -117,9 +134,9 @@ def get_model_input(
         A tuple containing the two final DataFrames:
         (validation_set, training_set).
     """
-    combined_df_mols = add_molecule_column(combined_df)
-    combined_df_fingerprints = get_fingerprints(combined_df_mols)
+    combined_df_mols = add_molecule_column(combined_df, fp_tracker)
+    combined_df_fingerprints = get_fingerprints(combined_df_mols, combined_df_w_fp, fp_tracker)
     validation_set, training_set = extract_validataion_dataset(
         combined_df_fingerprints, validation_percentage
         )
-    return validation_set, training_set
+    return combined_df_fingerprints, validation_set, training_set

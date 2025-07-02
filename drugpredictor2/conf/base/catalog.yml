@@ -26,6 +26,18 @@ combined_csv_mock:
 
 # molecular calculations
 
+fp_tracker:
+  type: text.TextDataSet
+  filepath: ./data/05_model_input/fp_tracker.txt
+
+presplit_model_input_mock:
+    type: pickle.PickleDataSet
+    filepath: data/05_model_input/presplit_model_input_mock.pickle
+
+presplit_model_input_mock_updated:
+    type: pickle.PickleDataSet
+    filepath: data/05_model_input/presplit_model_input_mock.pickle
+
 model_input:
     type: pickle.PickleDataSet
     filepath: data/05_model_input/input_table.pickle
