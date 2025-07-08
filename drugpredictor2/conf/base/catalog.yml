@@ -8,7 +8,7 @@ tracker:
   type: text.TextDataSet
   filepath: ./data/01_raw/tracker.txt
 
-tracker_updated:
+fp_tracker_updated:
   type: text.TextDataSet
   filepath: ./data/01_raw/tracker.txt
 
@@ -22,6 +22,10 @@ combined_csv_updated:
 
 combined_csv_mock:
   type: pandas.CSVDataSet
+  filepath: ./data/03_primary/combined_output_mock.csv
+
+combined_csv_mock_updated:
+  type: pandas.CSVDataSet
   filepath: ./data/03_primary/combined_output_mock.csv 
 
 # molecular calculations
@@ -30,29 +34,49 @@ fp_tracker:
   type: text.TextDataSet
   filepath: ./data/05_model_input/fp_tracker.txt
 
+fp_tracker_updated:
+  type: text.TextDataSet
+  filepath: ./data/05_model_input/fp_tracker.txt
+
+fp_tracker_mock:
+  type: text.TextDataSet
+  filepath: ./data/05_model_input/fp_tracker_mock.txt
+
+fp_tracker_mock_updated:
+  type: text.TextDataSet
+  filepath: ./data/05_model_input/fp_tracker_mock.txt
+
+presplit_model_input:
+    type: pandas.CSVDataSet
+    filepath: data/05_model_input/presplit_model_input.csv
+
+presplit_model_input_updated:
+    type: pandas.CSVDataSet
+    filepath: data/05_model_input/presplit_model_input.csv
+
 presplit_model_input_mock:
-    type: pickle.PickleDataSet
-    filepath: data/05_model_input/presplit_model_input_mock.pickle
+    type: pandas.CSVDataSet
+    filepath: data/05_model_input/presplit_model_input_mock.csv
 
 presplit_model_input_mock_updated:
-    type: pickle.PickleDataSet
-    filepath: data/05_model_input/presplit_model_input_mock.pickle
+    type: pandas.CSVDataSet
+    filepath: data/05_model_input/presplit_model_input_mock.csv
 
 model_input:
-    type: pickle.PickleDataSet
-    filepath: data/05_model_input/input_table.pickle
+    type: pandas.CSVDataSet
+    filepath: data/05_model_input/model_input.csv
 
 model_input_mock:
-    type: pickle.PickleDataSet
-    filepath: data/05_model_input/input_table_mock.pickle
+    type: pandas.CSVDataSet
+    filepath: data/05_model_input/model_input_mock.csv
 
 validation_dataset:
-    type: pickle.PickleDataSet
-    filepath: data/05_model_input/input_table_val.pickle
+    type: pandas.CSVDataSet
+    filepath: data/05_model_input/model_input_val.csv
 
 validation_dataset_mock:
-    type: pickle.PickleDataSet
-    filepath: data/05_model_input/input_table_val_mock.pickle
+    type: pandas.CSVDataSet
+    filepath: data/05_model_input/model_input_val_mock.csv
 
 # model
 

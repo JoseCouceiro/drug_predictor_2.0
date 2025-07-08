@@ -1,4 +1,5 @@
 import os
+import ast
 import warnings
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 import pandas as pd
@@ -15,6 +16,37 @@ from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 from typing import Tuple, Dict, Any
 
 # Functions to prepare data input"
+def load_and_preprocess_fingerprints(model_input: pd.DataFrame,
+                                     params: dict
+                                    ) -> pd.DataFrame:
+    """
+    Loads a DataFrame from a CSV, and converts the fingerprint column
+    (expected to contain string representations of lists/arrays)
+    back into actual NumPy arrays.
+    """
+    # Apply ast.literal_eval to the fingerprint column
+    # Use a lambda function with error handling for robustness
+    def parse_fingerprint_string(fp_str):
+        if pd.isna(fp_str): # Handle NaN values if any
+            return None
+        try:
+            # ast.literal_eval can convert string representations of lists/tuples to actual lists/tuples
+            # Then convert that list/tuple to a NumPy array
+            return np.array(ast.literal_eval(fp_str), dtype=int)
+        except (ValueError, SyntaxError) as e:
+            print(f"Warning: Could not parse fingerprint string '{fp_str}'. Error: {e}. Returning None.")
+            return None
+
+    model_input[params['X_column']] = model_input[params['X_column']].apply(parse_fingerprint_string)
+
+    # Drop rows where fingerprint parsing failed (i.e., fp_column_name is None)
+    model_input.dropna(subset=[params['X_column']], inplace=True)
+
+    print(f"DataFrame loaded from CSV and '{params['X_column']}' column parsed. Shape: {model_input.shape}")
+    print(f"Type of first element in '{params['X_column']}' after parsing: {type(model_input[params['X_column']].iloc[0])}")
+
+    return model_input
+
 def train_test_split_column(model_input: pd.DataFrame,
                             params: dict
                             )-> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
@@ -75,6 +107,7 @@ def reshape_input(X_train: pd.DataFrame,
         - n_classes (int): The number of unique classes found in `y_train`.
     """
     X_train_array = np.array(list(X_train))
+    print('X_train_array shape ', X_train_array.shape)
     X_test_array = np.array(list(X_test))
 
     n_classes = len(np.unique(y_train))
@@ -291,8 +324,10 @@ def obtain_trained_model(model_input: pd.DataFrame,
         - val_predictions (pd.Series): Predicted labels for the `validation_dataset`.
         - val_class_rep (str): Classification report string for the `validation_dataset`.
     """
+    # 0. Convertions
+    converted_model_input = load_and_preprocess_fingerprints(model_input, params)
     # 1. Splitting the raw input data
-    X_train, X_test, y_train, y_test = train_test_split_column(model_input, params)
+    X_train, X_test, y_train, y_test = train_test_split_column(converted_model_input, params)
     # 2. Reshaping the feature data for CNN
     model_data = reshape_input(X_train, X_test, y_train)
     # 3. Tuning the CNN model's hyperparameters

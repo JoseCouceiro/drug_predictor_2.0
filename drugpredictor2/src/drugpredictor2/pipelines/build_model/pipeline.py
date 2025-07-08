@@ -6,8 +6,8 @@ def create_pipeline(**kwargs) -> Pipeline:
         [
         node(
           func=obtain_trained_model,
-          inputs=["model_input",
-                  "validation_dataset",
+          inputs=["model_input_mock",
+                  "validation_dataset_mock",
                   "params:X_y_split",
                   "params:tune_model"],
           outputs=["def_model",
