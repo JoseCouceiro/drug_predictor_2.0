@@ -85,18 +85,24 @@ def get_fingerprints(subset_df: pd.DataFrame,
     This function takes a DataFrame subset (typically containing new rows with RDKit molecule
     objects), computes Morgan fingerprints for each molecule, drops the molecule column,
     and then concatenates these new fingerprint rows with an existing main DataFrame that
-    already contains fingerprints. It also updates a tracker for the next batch of rows.
+    already contains fingerprints.
+
+    Crucially, it also ensures that the computed molecular fingerprints (which are
+    initially NumPy arrays) are converted into standard Python lists. This conversion
+    is vital to prevent data truncation (e.g., '...') when the combined DataFrame is
+    later saved to text-based formats like CSV, allowing for reliable parsing upon reloading.
 
     Args:
         subset_df: A DataFrame containing an 'RDKit_Molecule' column (usually
             representing newly added molecules) for which fingerprints need to be computed.
-        df_w_fp: The main DataFrame that already contains fingerprints (a 'Morgan2FP' column) and will be updated 
-        with the results from `subset_df`.
+        df_w_fp: The main DataFrame that already contains fingerprints (a 'Morgan2FP' column)
+            and will be updated with the results from `subset_df`.
 
     Returns:
         A tuple containing:
         - combined_df_w_fp (pd.DataFrame): The updated main DataFrame with the
-          newly computed fingerprints appended.
+          newly computed fingerprints appended. The 'Morgan2FP' column in this
+          DataFrame will contain Python lists (not NumPy arrays) for each fingerprint.
         - updated_fp_tracker (str): The new length of `combined_df_w_fp` as a string,
           to be used as the starting index for the next batch of processing.
 
@@ -121,6 +127,7 @@ def get_fingerprints(subset_df: pd.DataFrame,
     
     # Update the tracker with the new total length of the combined DataFrame
     updated_fp_tracker = str(len(combined_df_w_fp))
+    combined_df_w_fp[calculated_column] = combined_df_w_fp[calculated_column].apply(lambda x: x.tolist())
     print('FINGERPRINTS OBTAINED')
     return combined_df_w_fp, updated_fp_tracker
 

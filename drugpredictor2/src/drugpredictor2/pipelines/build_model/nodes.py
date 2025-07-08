@@ -14,7 +14,7 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Conv1D, MaxPool1D, Flatten, Dropout
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 from typing import Tuple, Dict, Any
-
+"""separar parse_fingerprint_string y usarlo también en la función evaluate_model con el validation dataset"""
 # Functions to prepare data input"
 def load_and_preprocess_fingerprints(model_input: pd.DataFrame,
                                      params: dict
@@ -25,15 +25,14 @@ def load_and_preprocess_fingerprints(model_input: pd.DataFrame,
     back into actual NumPy arrays.
     """
     # Apply ast.literal_eval to the fingerprint column
-    # Use a lambda function with error handling for robustness
     def parse_fingerprint_string(fp_str):
-        if pd.isna(fp_str): # Handle NaN values if any
+        if pd.isna(fp_str):
             return None
         try:
-            # ast.literal_eval can convert string representations of lists/tuples to actual lists/tuples
-            # Then convert that list/tuple to a NumPy array
-            return np.array(ast.literal_eval(fp_str), dtype=int)
-        except (ValueError, SyntaxError) as e:
+            # Remove brackets, split by space, convert to int
+            python_list = ast.literal_eval(fp_str)
+            return np.array(python_list, dtype=int)
+        except Exception as e:
             print(f"Warning: Could not parse fingerprint string '{fp_str}'. Error: {e}. Returning None.")
             return None
 
