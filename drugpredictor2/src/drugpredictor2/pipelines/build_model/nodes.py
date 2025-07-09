@@ -16,33 +16,72 @@ from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 from typing import Tuple, Dict, Any
 """separar parse_fingerprint_string y usarlo también en la función evaluate_model con el validation dataset"""
 # Functions to prepare data input"
-def load_and_preprocess_fingerprints(model_input: pd.DataFrame,
-                                     params: dict
-                                    ) -> pd.DataFrame:
-    """
-    Loads a DataFrame from a CSV, and converts the fingerprint column
-    (expected to contain string representations of lists/arrays)
-    back into actual NumPy arrays.
-    """
-    # Apply ast.literal_eval to the fingerprint column
-    def parse_fingerprint_string(fp_str):
+
+def parse_fingerprint_string(fp_str):
+        """Parses a string representation of a molecular fingerprint list into a NumPy array.
+
+        This function is designed to convert string formats, typically read from a CSV file,
+        that represent a Python list of integers (e.g., "[0, 1, 0, ..., 1]") into a
+        NumPy array. It's robust to NaN values and includes error handling for unparsable strings.
+
+        Args:
+            fp_str: The string containing the list representation of the fingerprint.
+                    Expected format is a valid Python list literal string.
+
+        Returns:
+            A NumPy array (dtype=int) representing the fingerprint if parsing is successful.
+            Returns `None` if the input is NaN or if the string cannot be parsed into a list.
+
+        Raises:
+            (Implicit) ValueError, SyntaxError: Catches exceptions from `ast.literal_eval`
+                                            if the string is not a valid Python literal,
+                                            and returns `None` after printing a warning.
+        """
         if pd.isna(fp_str):
             return None
         try:
-            # Remove brackets, split by space, convert to int
+            # String to Python list
             python_list = ast.literal_eval(fp_str)
+            # Python list to np array
             return np.array(python_list, dtype=int)
         except Exception as e:
             print(f"Warning: Could not parse fingerprint string '{fp_str}'. Error: {e}. Returning None.")
             return None
 
+def load_and_preprocess_fingerprints(model_input: pd.DataFrame,
+                                     params: dict
+                                    ) -> pd.DataFrame:
+    """Loads and preprocesses molecular fingerprint data within a DataFrame.
+
+    This function takes a DataFrame that contains molecular fingerprints as
+    string representations of Python lists (typically after being read from a CSV).
+    It applies the `parse_fingerprint_string` helper to convert these strings
+    into actual NumPy arrays. Rows for which fingerprint parsing fails are
+    subsequently removed from the DataFrame.
+
+    Args:
+        model_input: A Pandas DataFrame where one column (specified by `params['X_column']`)
+                     contains molecular fingerprints as string representations of Python lists.
+                     Example: `"[0, 1, 0, 1, 1, 0]"`
+        params: A dictionary of parameters, expected to contain:
+                - 'X_column' (str): The name of the column in `model_input` that
+                                    holds the fingerprint strings.
+
+    Returns:
+        A Pandas DataFrame with the specified fingerprint column transformed so that
+        its elements are NumPy arrays. Rows with unparsable fingerprints are dropped.
+
+    Raises:
+        KeyError: If 'X_column' is not found in the `params` dictionary or if the
+                  specified 'X_column' does not exist in the `model_input` DataFrame.
+        (Implicit) Exceptions from `parse_fingerprint_string` are handled within that
+                   function, leading to `None` values that are then dropped.
+    """
+    # Apply the parsing function to the fingerprint column
     model_input[params['X_column']] = model_input[params['X_column']].apply(parse_fingerprint_string)
 
     # Drop rows where fingerprint parsing failed (i.e., fp_column_name is None)
     model_input.dropna(subset=[params['X_column']], inplace=True)
-
-    print(f"DataFrame loaded from CSV and '{params['X_column']}' column parsed. Shape: {model_input.shape}")
-    print(f"Type of first element in '{params['X_column']}' after parsing: {type(model_input[params['X_column']].iloc[0])}")
 
     return model_input
 
@@ -106,7 +145,6 @@ def reshape_input(X_train: pd.DataFrame,
         - n_classes (int): The number of unique classes found in `y_train`.
     """
     X_train_array = np.array(list(X_train))
-    print('X_train_array shape ', X_train_array.shape)
     X_test_array = np.array(list(X_test))
 
     n_classes = len(np.unique(y_train))
@@ -323,20 +361,23 @@ def obtain_trained_model(model_input: pd.DataFrame,
         - val_predictions (pd.Series): Predicted labels for the `validation_dataset`.
         - val_class_rep (str): Classification report string for the `validation_dataset`.
     """
-    # 0. Convertions
+    # 1. Convertions
     converted_model_input = load_and_preprocess_fingerprints(model_input, params)
-    # 1. Splitting the raw input data
+    # 2. Splitting the raw input data
     X_train, X_test, y_train, y_test = train_test_split_column(converted_model_input, params)
-    # 2. Reshaping the feature data for CNN
+    # 3. Reshaping the feature data for CNN
     model_data = reshape_input(X_train, X_test, y_train)
-    # 3. Tuning the CNN model's hyperparameters
+    # 4. Tuning the CNN model's hyperparameters
     tuned_model = tune_hp_def_model(model_data, y_train, y_test, tune_params)
-    # 4. Training the best-found model
+    # 5. Training the best-found model
     def_model, history = train_def_model(tuned_model, model_data, y_train, y_test)
-    # 5. Evaluation
+    print('TRAINED MODEL OBTAINED')  
+    # 6. Evaluation
+    print('Model evaluation')
     train_predictions, train_class_rep, val_predictions, val_class_rep = \
         evaluate_model(def_model, model_data, y_test, validation_dataset, params)
     
+      
     return def_model, history, train_predictions, train_class_rep, val_predictions, val_class_rep
 
 # Model evaluation
@@ -382,21 +423,27 @@ def evaluate_model(model: Sequential,
 
     This function takes a trained Keras model and assesses its performance on two distinct
     datasets: the test set derived from the initial `model_input` (used during tuning
-    and training evaluation) and an entirely separate `validation_dataset`. It uses
-    the `get_predictions` helper function to obtain predictions and classification reports
-    for each.
+    and training evaluation) and an entirely separate `validation_dataset`.
+    For the `validation_dataset`, it performs on-the-fly preprocessing to convert
+    fingerprint string representations (from CSV-like sources) into NumPy arrays
+    and reshapes them for the model. It then uses the `get_predictions` helper function
+    to obtain predictions and classification reports for each.
 
     Args:
         model: The trained Keras Sequential model.
         model_data: A tuple containing the reshaped data from the initial split,
-                    expected to contain: `(_, reshaped_X_test, _, _)`.
+                    expected to contain: `(reshaped_X_train, reshaped_X_test, y_train, n_classes)`.
+                    Only `reshaped_X_test` is directly used from this tuple.
         y_test: The true labels for the test set derived from `model_input`, as a Pandas Series.
-        validation_dataset: A separate Pandas DataFrame containing features and labels for validation.
+        validation_dataset: A separate Pandas DataFrame containing features (as string
+                            representations of lists or arrays) and labels for validation.
+                            This DataFrame is expected to come directly from a source
+                            like a CSV and will be preprocessed internally.
         params: A dictionary of parameters, expected to contain:
                 - 'X_column' (str): The name of the column in `validation_dataset`
-                                    that contains the input features.
+                                    that contains the input features (e.g., 'Morgan2FP').
                 - 'label' (str): The name of the column in `validation_dataset`
-                                 that contains the target labels.
+                                 that contains the target labels (e.g., 'RuleFive').
 
     Returns:
         A tuple containing:
@@ -404,14 +451,21 @@ def evaluate_model(model: Sequential,
         - train_class_rep (str): Classification report string for the test set.
         - val_predictions (pd.Series): Predicted labels for the `validation_dataset`.
         - val_class_rep (str): Classification report string for the `validation_dataset`.
+
+    Raises:
+        KeyError: If 'X_column' or 'label' are not found in the `params` dictionary.
+        ValueError: If the reshaped validation features do not have a 2D shape before
+                    adding the channel dimension (i.e., if fingerprint parsing fails).
+        Exception: Propagates exceptions from `load_and_preprocess_fingerprints` or `get_predictions`.
     """
     # Extracting training values
     _, reshaped_X_test, _, _ = model_data
 
     # Prepare validation dataset
-    val_X_test = validation_dataset[params['X_column']]
-    val_X_test_array = np.array(list(val_X_test))
+    converted_val_dataset = load_and_preprocess_fingerprints(validation_dataset, params)
+    val_X_test_array = np.array(list(converted_val_dataset[params['X_column']]))
     val_y_test = validation_dataset[params['label']]
+    
     # Reshape the validation features for a 1D CNN (batch_size, sequence_length, features)
     reshaped_val_X_test = val_X_test_array.reshape((val_X_test_array.shape[0], val_X_test_array.shape[1], 1))
     

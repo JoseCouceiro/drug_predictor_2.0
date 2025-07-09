@@ -6,16 +6,16 @@ def create_pipeline(**kwargs) -> Pipeline:
       node(
         func=get_model_input,
         inputs=[
-                "combined_csv_mock",
-                "presplit_model_input_mock",
-                "params:size_validation_data_mock",
-                "fp_tracker_mock"
+                "combined_csv",
+                "presplit_model_input",
+                "params:size_validation_data",
+                "fp_tracker"
                 ],
         outputs=[
-                "presplit_model_input_mock_updated",
-                "validation_dataset_mock",
-                "model_input_mock",
-                "fp_tracker_mock_updated"
+                "presplit_model_input_updated",
+                "validation_dataset",
+                "model_input",
+                "fp_tracker_updated"
                 ],
         name="get_model_input_node",
         )
