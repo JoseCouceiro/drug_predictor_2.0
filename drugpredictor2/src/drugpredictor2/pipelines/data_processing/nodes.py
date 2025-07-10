@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import PandasTools, Descriptors
+from typing import List, Tuple, Dict, Any, Optional
 
 def get_unprocessed_files(directory_path: str, tracker: str) -> list[tuple[str,str]]:
     """Identifies new files in a directory that have not been processed yet.
@@ -51,56 +52,48 @@ def update_tracker(directory_path: str, tracker: str) -> tuple[str,list[tuple[st
         tracker +='\n'+filename
     return tracker, new_files
 
-def process_inputs(directory_path: str, tracker: str) -> tuple[list[pd.DataFrame],str]:
+def process_inputs(directory_path: str, tracker: str) -> Tuple[List[Tuple[str, pd.DataFrame]], str]:
     """Reads new gzipped SDF files, extracts molecular properties, and creates DataFrames.
-
-    For each unprocessed file found, this function opens it, iterates through
-    the molecules, calculates key chemical descriptors using RDKit, and
-    compiles the data into a DataFrame. Each file results in one DataFrame.
-
-    Args:
-        directory_path: Path to the directory containing new .sdf.gz files.
-        tracker: The current tracker string of processed filenames.
 
     Returns:
         A tuple containing:
-            1. A list of pandas DataFrames, one for each newly processed SDF file.
+            1. A list of tuples, where each tuple is (filename, pandas DataFrame)
+               for each newly processed SDF file.
             2. The updated tracker string with the new filenames.
     """
     tracker_updated, new_files = update_tracker(directory_path, tracker)
-    df_list = []
+    df_with_filenames_list = [] # Store tuples of (filename, DataFrame)
+
     for filename, file_path in new_files:
-        # Open the gzipped SDF file
+        data = []
         try:
             with gzip.open(file_path, 'rb') as gz:
                 supplier = Chem.ForwardSDMolSupplier(gz)
-                # Initialize a list to store data
-                data = []
-                # Iterate over each molecule in the file
-                n = 1
-                for mol in supplier:
-                    n += 1
+                for i, mol in enumerate(supplier):
                     if mol is None:
+                        print(f"Warning: Skipping invalid molecule in {filename} at index {i}")
                         continue
                     try:
-                        # Access molecule properties
-                        properties = mol.GetPropsAsDict()
-                        # Add properties
                         data.append({
                             "SMILES": Chem.MolToSmiles(mol),
                             "Molecular Weight": Descriptors.MolWt(mol),
                             "H-Bond Donors": Chem.Lipinski.NumHDonors(mol),
                             "H-Bond Acceptors": Chem.Lipinski.NumHAcceptors(mol),
                             "LogP": Descriptors.MolLogP(mol),
+                            "OriginalFile": filename
                         })
                     except Exception as e:
-                        print(f"Error processing molecule: {e}")
-                # Create a DataFrame from the list of dictionaries
+                        print(f"Error processing molecule {i+1} in {filename}: {e}")
+            if data:
                 df = pd.DataFrame(data)
-                df_list.append(df)
+                df_with_filenames_list.append((filename, df))
+            else:
+                print(f"No valid molecules found in {filename}.")
+
         except Exception as e:
-            print(f"Error reading the SDF file: {e}")
-    return df_list, tracker_updated
+            print(f"Error reading the SDF file {file_path}: {e}")
+
+    return df_with_filenames_list, tracker_updated
 
 def is_lipinski(x: pd.DataFrame) -> pd.DataFrame:
     """Applies Lipinski's Rule of Five to a DataFrame of molecular properties.
@@ -126,8 +119,8 @@ def is_lipinski(x: pd.DataFrame) -> pd.DataFrame:
     x['RuleFive'] = np.where(((hdonor & haccept & mw) | (hdonor & haccept & clogP) | (hdonor & mw & clogP) | (haccept & mw & clogP)), 1, 0)
     return x
 
-def get_lipinski_dataframes(sdf_folder: str, tracker: str) -> tuple[list[pd.DataFrame],str]:
-    """Processes new SDF files and applies Lipinski's Rule of Five to each.
+""" def get_lipinski_dataframes(sdf_folder: str, tracker: str) -> tuple[list[pd.DataFrame],str]:
+    Processes new SDF files and applies Lipinski's Rule of Five to each.
 
     This function orchestrates the reading of new SDF files and the subsequent
     application of the Lipinski filter to the resulting DataFrames.
@@ -140,13 +133,13 @@ def get_lipinski_dataframes(sdf_folder: str, tracker: str) -> tuple[list[pd.Data
         A tuple containing:
             1. A list of DataFrames, each with the 'RuleFive' column added.
             2. The updated tracker string.
-    """
+   
     df_list, tracker_updated = process_inputs(sdf_folder, tracker)
     df_lip_list = [is_lipinski(df) for df in df_list]
-    return df_lip_list, tracker_updated
+    return df_lip_list, tracker_updated """
 
-def update_dataframe(combined_csv: pd.DataFrame, sdf_folder: str, tracker: str) -> tuple[pd.DataFrame,str]:
-    """Appends newly processed and filtered molecular data to an existing DataFrame.
+""" def update_dataframe(combined_csv: pd.DataFrame, sdf_folder: str, tracker: str) -> tuple[pd.DataFrame,str]:
+    Appends newly processed and filtered molecular data to an existing DataFrame.
 
     This node takes an existing DataFrame, processes all new SDF files from a
     specified folder, filters them using Lipinski's rules, and concatenates
@@ -161,7 +154,33 @@ def update_dataframe(combined_csv: pd.DataFrame, sdf_folder: str, tracker: str) 
         A tuple containing:
             1. The combined DataFrame with new data appended.
             2. The updated tracker string with new filenames added.
-    """
+   
     df_lip_list, tracker_updated = get_lipinski_dataframes(sdf_folder, tracker)
     combined_csv_updated = pd.concat([combined_csv]+df_lip_list, ignore_index=True)
-    return combined_csv_updated, tracker_updated
+    return combined_csv_updated, tracker_updated """
+
+def apply_lipinski_and_prepare_for_saving(
+    processed_dfs_with_filenames: List[Tuple[str, pd.DataFrame]]
+) -> Dict[str, pd.DataFrame]:
+    """Applies Lipinski's rule to each DataFrame and prepares them for individual saving.
+
+    Args:
+        processed_dfs_with_filenames: A list of tuples, each containing
+                                      (filename, DataFrame) from process_inputs.
+
+    Returns:
+        A dictionary where keys are unique identifiers for saving (e.g., cleaned filenames)
+        and values are the processed DataFrames with the 'RuleFive' column.
+        This allows Kedro to save each DataFrame individually.
+    """
+    output_dataframes = {}
+    for filename, df in processed_dfs_with_filenames:
+        df_lip = is_lipinski(df)
+        # Create a unique key for the catalog.
+        # Replace non-alphanumeric chars for valid dataset names if needed,
+        # or use a simple prefix + filename without extension.
+        # For example, "file_processed_data_<original_filename_no_ext>"
+        base_filename = os.path.splitext(os.path.splitext(filename)[0])[0] # Remove .sdf.gz
+        output_key = f"processed_sdf_file_{base_filename.replace('.', '_').replace('-', '_')}"
+        output_dataframes[output_key] = df_lip
+    return output_dataframes

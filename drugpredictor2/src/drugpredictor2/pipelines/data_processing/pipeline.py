@@ -1,18 +1,22 @@
 from kedro.pipeline import Pipeline, node, pipeline
-from .nodes import update_dataframe
+from .nodes import process_inputs, apply_lipinski_and_prepare_for_saving
 
 
 def create_pipeline(**kwargs) -> Pipeline:
     return pipeline(
-            [
-                node(
-                    func=update_dataframe,
-                    inputs=["combined_csv",
-                            "sdf_folder",
-                            "tracker"],
-                    outputs=["combined_csv_updated", "tracker_updated"],
-                    name="update_dataframe_node"
-                )  
-            ]
-        )
+        [
+            node(
+                func=process_inputs,
+                inputs=["sdf_folder", "tracker"],
+                outputs=["processed_sdf_dataframes", "tracker_updated"],
+                name="process_new_sdf_files_node"
+            ),
+            node(
+                func=apply_lipinski_and_prepare_for_saving,
+                inputs="processed_sdf_dataframes",
+                outputs="processed_and_lipinski_dataframes",
+                name="apply_lipinski_and_prepare_node"
+            )
+        ]
+    )
 

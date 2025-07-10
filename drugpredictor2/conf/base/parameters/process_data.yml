@@ -1,0 +1,5 @@
+params:
+  # Path to your raw SDF files. Ensure this directory exists and contains .sdf.gz files.
+  sdf_directory_path: data/01_raw/sdf/
+  # Output directory for the processed fingerprints
+  fingerprints_output_directory: data/03_primary/all_fingerprinted_batches/

@@ -1,125 +1,19 @@
-# data processing
+raw_sdf_files:
+  type: PartitionedDataSet
+  path: data/01_raw/sdf_files
+  filename_suffix: ".sdf.gz"  # Add this line
+  dataset:
+    type: kedro.extras.datasets.text.TextDataSet  # For raw bytes
 
-sdf_folder:
-  type: MemoryDataSet
-  data: data/01_raw/sdf
+featurized_data:
+  type: PartitionedDataSet
+  path: data/05_model_input/featurized_data
+  dataset:
+    type: pandas.ParquetDataSet
+    filepath: dummy.parquet  # This will be ignored - path is determined by PartitionedDataSet
 
-tracker:
-  type: text.TextDataSet
-  filepath: ./data/01_raw/tracker.txt
-
-fp_tracker_updated:
-  type: text.TextDataSet
-  filepath: ./data/01_raw/tracker.txt
-
-combined_csv:
-  type: pandas.CSVDataSet
-  filepath: ./data/03_primary/combined_output.csv
-
-combined_csv_updated:
-  type: pandas.CSVDataSet
-  filepath: ./data/03_primary/combined_output.csv
-
-combined_csv_mock:
-  type: pandas.CSVDataSet
-  filepath: ./data/03_primary/combined_output_mock.csv
-
-combined_csv_mock_updated:
-  type: pandas.CSVDataSet
-  filepath: ./data/03_primary/combined_output_mock.csv 
-
-# molecular calculations
-
-fp_tracker:
-  type: text.TextDataSet
-  filepath: ./data/05_model_input/fp_tracker.txt
-
-fp_tracker_updated:
-  type: text.TextDataSet
-  filepath: ./data/05_model_input/fp_tracker.txt
-
-fp_tracker_mock:
-  type: text.TextDataSet
-  filepath: ./data/05_model_input/fp_tracker_mock.txt
-
-fp_tracker_mock_updated:
-  type: text.TextDataSet
-  filepath: ./data/05_model_input/fp_tracker_mock.txt
-
-presplit_model_input:
-    type: pandas.CSVDataSet
-    filepath: data/05_model_input/presplit_model_input.csv
-
-presplit_model_input_updated:
-    type: pandas.CSVDataSet
-    filepath: data/05_model_input/presplit_model_input.csv
-
-presplit_model_input_mock:
-    type: pandas.CSVDataSet
-    filepath: data/05_model_input/presplit_model_input_mock.csv
-
-presplit_model_input_mock_updated:
-    type: pandas.CSVDataSet
-    filepath: data/05_model_input/presplit_model_input_mock.csv
-
-model_input:
-    type: pandas.CSVDataSet
-    filepath: data/05_model_input/model_input.csv
-
-model_input_mock:
-    type: pandas.CSVDataSet
-    filepath: data/05_model_input/model_input_mock.csv
-
-validation_dataset:
-    type: pandas.CSVDataSet
-    filepath: data/05_model_input/model_input_val.csv
-
-validation_dataset_mock:
-    type: pandas.CSVDataSet
-    filepath: data/05_model_input/model_input_val_mock.csv
-
-# model
-
-def_model:
-    type: tensorflow.TensorFlowModelDataset
-    filepath: data/06_models/def_model.hd5
-    load_args:
-        compile: False
-    save_args:
-        save_format: h5
-        overwrite: True
-
-history:
-    type: json.JSONDataSet
-    filepath: data/06_models/history.json
-
-# evaluation
-
-train_predictions:
-    type: pickle.PickleDataSet
-    filepath: data/08_reporting/train_predictions.pickle
-
-train_classification_report:
-    type: text.TextDataSet
-    filepath: ./data/08_reporting/train_classification_report.txt 
-
-validation_predictions:
-    type: pickle.PickleDataSet
-    filepath: data/08_reporting/validation_predictions.pickle
-
-validation_classification_report:
-    type: text.TextDataSet
-    filepath: ./data/08_reporting/validation_classification_report.txt 
-
-training_fig:
-    type: matplotlib.MatplotlibWriter
-    filepath: data/08_reporting/training_fig.png
-    save_args:
-        format: png
-
-confussion_matrix_fig:
-    type: matplotlib.MatplotlibWriter
-    filepath: data/08_reporting/confussion_matrix.png
-    save_args:
-        format: png
+# For local testing you might want to add this:
+processed_sample:
+  type: pandas.ParquetDataSet
+  filepath: data/03_primary/processed_sample.parquet
 

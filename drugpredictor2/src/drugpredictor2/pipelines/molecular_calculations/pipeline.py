@@ -1,5 +1,5 @@
 from kedro.pipeline import Pipeline, node, pipeline
-from .nodes import get_model_input
+from .nodes import process_batch_to_fingerprints, create
 
 def create_pipeline(**kwargs) -> Pipeline:
     return pipeline([
