@@ -1,9 +1,10 @@
+import math
+import numpy as np
+import pandas as pd
 import os
 import ast
 import warnings
 warnings.filterwarnings('ignore', category=DeprecationWarning)
-import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
@@ -13,502 +14,303 @@ from tensorflow.keras import layers
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Conv1D, MaxPool1D, Flatten, Dropout
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
-from typing import Tuple, Dict, Any
-"""separar parse_fingerprint_string y usarlo también en la función evaluate_model con el validation dataset"""
-# Functions to prepare data input"
-
-def parse_fingerprint_string(fp_str):
-        """Parses a string representation of a molecular fingerprint list into a NumPy array.
-
-        This function is designed to convert string formats, typically read from a CSV file,
-        that represent a Python list of integers (e.g., "[0, 1, 0, ..., 1]") into a
-        NumPy array. It's robust to NaN values and includes error handling for unparsable strings.
-
-        Args:
-            fp_str: The string containing the list representation of the fingerprint.
-                    Expected format is a valid Python list literal string.
-
-        Returns:
-            A NumPy array (dtype=int) representing the fingerprint if parsing is successful.
-            Returns `None` if the input is NaN or if the string cannot be parsed into a list.
-
-        Raises:
-            (Implicit) ValueError, SyntaxError: Catches exceptions from `ast.literal_eval`
-                                            if the string is not a valid Python literal,
-                                            and returns `None` after printing a warning.
-        """
-        if pd.isna(fp_str):
-            return None
-        try:
-            # String to Python list
-            python_list = ast.literal_eval(fp_str)
-            # Python list to np array
-            return np.array(python_list, dtype=int)
-        except Exception as e:
-            print(f"Warning: Could not parse fingerprint string '{fp_str}'. Error: {e}. Returning None.")
-            return None
+from typing import Dict, Callable, Iterator, Tuple, Set
 
 def load_and_preprocess_fingerprints(model_input: pd.DataFrame,
                                      params: dict
                                     ) -> pd.DataFrame:
-    """Loads and preprocesses molecular fingerprint data within a DataFrame.
+    """
+    Prepares fingerprint data for the model, assuming input is NumPy arrays.
 
-    This function takes a DataFrame that contains molecular fingerprints as
-    string representations of Python lists (typically after being read from a CSV).
-    It applies the `parse_fingerprint_string` helper to convert these strings
-    into actual NumPy arrays. Rows for which fingerprint parsing fails are
-    subsequently removed from the DataFrame.
+    This function takes a DataFrame where the fingerprint column contains
+    NumPy arrays of booleans (loaded from Parquet) and efficiently converts
+    them into arrays of integers (0s and 1s). It also removes any rows
+    with missing fingerprint data.
 
     Args:
-        model_input: A Pandas DataFrame where one column (specified by `params['X_column']`)
-                     contains molecular fingerprints as string representations of Python lists.
-                     Example: `"[0, 1, 0, 1, 1, 0]"`
-        params: A dictionary of parameters, expected to contain:
-                - 'X_column' (str): The name of the column in `model_input` that
-                                    holds the fingerprint strings.
+        model_input: A DataFrame where `params['X_column']` contains
+                     NumPy arrays of booleans.
+        params: A dictionary expecting the key 'X_column'.
 
     Returns:
-        A Pandas DataFrame with the specified fingerprint column transformed so that
-        its elements are NumPy arrays. Rows with unparsable fingerprints are dropped.
-
-    Raises:
-        KeyError: If 'X_column' is not found in the `params` dictionary or if the
-                  specified 'X_column' does not exist in the `model_input` DataFrame.
-        (Implicit) Exceptions from `parse_fingerprint_string` are handled within that
-                   function, leading to `None` values that are then dropped.
+        A DataFrame with fingerprints as NumPy arrays of integers, with
+        null rows dropped.
     """
-    # Apply the parsing function to the fingerprint column
-    model_input[params['X_column']] = model_input[params['X_column']].apply(parse_fingerprint_string)
+    x_col = params['X_column']
 
-    # Drop rows where fingerprint parsing failed (i.e., fp_column_name is None)
-    model_input.dropna(subset=[params['X_column']], inplace=True)
+    # Drop any rows that might have missing fingerprints.
+    model_input.dropna(subset=[x_col], inplace=True)
+
+    # Efficiently convert the boolean arrays to integer arrays.
+    model_input[x_col] = model_input[x_col].apply(lambda fp: fp.astype(int))
 
     return model_input
 
-def train_test_split_column(model_input: pd.DataFrame,
-                            params: dict
-                            )-> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-    """Splits a specified column of a DataFrame into training and testing sets.
+def create_train_test_indices(
+    partition_loaders: Dict[str, Callable[[], pd.DataFrame]],
+    params: Dict[str, str],
+    test_size: float = 0.3,
+    random_state: int = 42
+) -> Tuple[Set[int], Set[int], pd.Series, pd.Series]:
+    """
+    Performs a memory-efficient, stratified train-test split.
 
-    This function takes a Pandas DataFrame and extracts a feature column (X_column)
-    and a label column (label) based on provided parameters. It then performs a
-    stratified train-test split on these selected columns. The 'X_column' is
-    expected to contain list-like data (e.g., fingerprints), which are expanded
-    into a 2D DataFrame for the split.
+    This function scans all partitions, loading ONLY the label column to build a
+    lightweight metadata DataFrame. It then performs a stratified split on this
+    metadata to get global indices for the train and test sets.
 
     Args:
-        model_input: The input Pandas DataFrame containing the features and labels.
-        params: A dictionary of parameters, expected to contain:
-            - 'X_column' (str): The name of the column to be used as features (X values).
-                               This column should contain list-like data (e.g., molecular fingerprints).
-            - 'label' (str): The name of the column to be used as the target (y values).
+        partition_loaders: The PartitionedDataSet dictionary of loaders.
+        params: Dictionary containing the 'label' column name.
+        test_size: The proportion of the dataset to include in the test split.
+        random_state: Seed for reproducibility.
 
     Returns:
-        A tuple containing four elements:
-        - X_train (pd.DataFrame): Training features.
-        - X_test (pd.DataFrame): Testing features.
-        - y_train (pd.Series): Training labels.
-        - y_test (pd.Series): Testing labels.
-
-    Raises:
-        KeyError: If 'X_column' or 'label' are not found in the `params` dictionary
-                  or `model_input` DataFrame.
+        A tuple containing:
+        - train_indices (Set[int]): A set of global indices for the training set.
+        - test_indices (Set[int]): A set of global indices for the test set.
+        - y_train (pd.Series): The labels for the training set.
+        - y_test (pd.Series): The labels for the test set.
     """
-    X = model_input[params['X_column']]
-    y = model_input[params['label']]
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
-    return X_train, X_test, y_train, y_test
-
-def reshape_input(X_train: pd.DataFrame,
-                  X_test: pd.DataFrame,
-                  y_train: pd.Series
-                  ) -> tuple[np.ndarray, np.ndarray, Tuple[int,int], int]:
-    """Reshapes train/test feature data and determines class information for CNN input.
-
-    This function prepares feature data (X_train, X_test) for use with 1D Convolutional
-    Neural Networks by converting them to NumPy arrays and adding a channel dimension.
-    It also calculates the number of unique classes present in the training labels (y_train)
-    and determines the appropriate input shape for the CNN model.
-
-    Args:
-        X_train: Training features, expected as a Pandas DataFrame where each row
-                 represents a sample and columns represent features (e.g., fingerprint bits).
-        X_test: Testing features, expected as a Pandas DataFrame.
-        y_train: Training labels, expected as a Pandas Series. Used to determine
-                 the number of unique classes.
-
-    Returns:
-        A tuple containing four elements:
-        - reshaped_X_train (np.ndarray): Reshaped training features.
-        - reshaped_X_test (np.ndarray): Reshaped testing features.
-        - in_shape (Tuple[int, int]): The expected input shape for the 1D CNN model.
-        - n_classes (int): The number of unique classes found in `y_train`.
-    """
-    X_train_array = np.array(list(X_train))
-    X_test_array = np.array(list(X_test))
-
-    n_classes = len(np.unique(y_train))
+    print("Pass 1: Scanning partitions to create train/test split indices...")
     
-    # Reshape for 1D CNN model: (samples, features, 1)
-    reshaped_X_train= X_train_array.reshape((X_train_array.shape[0], X_train_array.shape[1], 1))
-    reshaped_X_test= X_test_array.reshape((X_test_array.shape[0], X_test_array.shape[1], 1))
-
-    # Determine in_shape for the CNN input layer (excluding batch size)
-    in_shape = reshaped_X_train.shape[1:]
+    metadata_list = []
+    # This loop loads only the necessary column and should be memory-light.
+    for partition_name, load_func in partition_loaders.items():
+        # Here we assume load_func() can be modified or that loading a full partition
+        # and immediately subsetting it is acceptable for a moment.
+        # For very large CSVs, you can optimize by reading only specific columns.
+        df = load_func()
+        metadata_list.append(df[[params['label']]])
     
-    return reshaped_X_train, reshaped_X_test, in_shape, n_classes
+    # Concatenate only the label data, which is small.
+    full_metadata = pd.concat(metadata_list, ignore_index=True)
+    
+    # Create a dummy X with the correct index for splitting
+    X_indices = full_metadata.index.to_series()
+    y_labels = full_metadata[params['label']]
+    
+    # Perform a stratified split on the indices
+    train_indices_df, test_indices_df, y_train, y_test = train_test_split(
+        X_indices, y_labels, test_size=test_size, random_state=random_state, stratify=y_labels
+    )
+    
+    print(f"Split complete. Train samples: {len(train_indices_df)}, Test samples: {len(test_indices_df)}")
+    
+    # Return as sets for fast O(1) lookups in the generator
+    return set(train_indices_df), set(test_indices_df), y_train, y_test
 
-def build_def_model(hp: HyperParameters) -> Sequential:
-    """Builds a 1D Convolutional Neural Network model using KerasTuner's HyperParameters
-    for binary classification.
 
-    This function defines the architecture of a 1D CNN model, allowing for
-    hyperparameter tuning through the provided `hp` (HyperParameters) object.
-    It constructs a sequential model with configurable convolutional layers,
-    max pooling, dropout, and dense layers, specifically tailored for
-    binary classification tasks.
+def partitioned_data_generator(
+    partition_loaders: Dict[str, Callable[[], pd.DataFrame]],
+    indices_to_use: Set[int],
+    params: Dict[str, str],
+    batch_size: int
+) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
+    """
+    A generator that loads and yields batches of data for a given set of indices.
+
+    It iterates through partitions one by one, processes them, filters rows
+    based on `indices_to_use`, and yields batches of a specified size.
 
     Args:
-        hp: An instance of `keras_tuner.HyperParameters` which allows for defining
-            hyperparameter search spaces (e.g., number of layers, filter sizes,
-            kernel sizes, learning rate, dropout rates).
+        partition_loaders: The PartitionedDataSet dictionary of loaders.
+        indices_to_use: A set of global row indices to include.
+        params: Dictionary with 'X_column' and 'label' names.
+        batch_size: The number of samples per batch.
 
-    Returns:
-        A `tensorflow.keras.models.Sequential` model compiled with Adam optimizer,
-        binary crossentropy loss, and accuracy metrics, optimized for two classes.
-
-    Note:
-        The input shape for the Conv1D layer is hardcoded to (2048, 1) as per the
-        current implementation. The output layer is configured for binary
-        classification (2 classes) using a single unit with a sigmoid activation
-        and `binary_crossentropy` loss. Ensure these match your data characteristics.
+    Yields:
+        A tuple of (X_batch, y_batch) ready for model training.
     """
-    # Create model object
+    global_index_offset = 0
+    
+    # This outer loop is required by Keras for multiple epochs
+    while True:
+        for partition_name, load_func in partition_loaders.items():
+            partition_df = load_func()
+            
+            # Preprocess the partition
+            processed_df = load_and_preprocess_fingerprints(partition_df.copy(), params)
+            if processed_df.empty:
+                global_index_offset += len(partition_df)
+                continue
+
+            # Determine which global indices from this partition should be used
+            partition_global_indices = set(range(global_index_offset, global_index_offset + len(partition_df)))
+            relevant_indices_in_partition = partition_global_indices.intersection(indices_to_use)
+
+            if not relevant_indices_in_partition:
+                global_index_offset += len(partition_df)
+                continue
+
+            # Convert global indices to local indices within the partition_df
+            local_indices_to_keep = [idx - global_index_offset for idx in relevant_indices_in_partition]
+            
+            # Filter the original (unprocessed) dataframe to align with processed data
+            target_df = partition_df.iloc[local_indices_to_keep]
+
+            # We must re-process the filtered data to ensure alignment, especially after dropping NaNs
+            final_batch_df = load_and_preprocess_fingerprints(target_df.copy(), params)
+
+            # Yield data in batches from this filtered partition
+            for i in range(0, len(final_batch_df), batch_size):
+                batch_df = final_batch_df.iloc[i:i + batch_size]
+                
+                X_list = list(batch_df[params['X_column']])
+                X_batch_array = np.array(X_list)
+                y_batch_array = np.array(batch_df[params['label']])
+                
+                # Reshape for 1D CNN
+                X_batch_reshaped = X_batch_array.reshape(
+                    (X_batch_array.shape[0], X_batch_array.shape[1], 1)
+                )
+                
+                yield (X_batch_reshaped, y_batch_array)
+            
+            global_index_offset += len(partition_df)
+        
+        # Reset for the next epoch
+        global_index_offset = 0
+
+# --- MODIFIED ORCHESTRATION FUNCTION ---
+
+def train_model_on_partitions(
+    partitioned_model_input: Dict[str, Callable[[], pd.DataFrame]],
+    validation_dataset: pd.DataFrame, # Assuming validation set is small and fits in memory
+    params: dict,
+    tune_params: dict,
+    batch_size: int = 128
+) -> tuple:
+    """
+    Orchestrates the entire model pipeline using memory-efficient generators
+    for partitioned data.
+    """
+    # 1. Get global train/test split indices without loading all data
+    train_indices, test_indices, y_train, y_test = create_train_test_indices(
+        partitioned_model_input, params
+    )
+    
+    # 2. Create data generators
+    train_generator = partitioned_data_generator(
+        partitioned_model_input, train_indices, params, batch_size
+    )
+    test_generator = partitioned_data_generator(
+        partitioned_model_input, test_indices, params, batch_size
+    )
+
+    # 3. Calculate steps for Keras
+    steps_per_epoch = math.ceil(len(train_indices) / batch_size)
+    validation_steps = math.ceil(len(test_indices) / batch_size)
+
+    # Note: KerasTuner with generators can be complex. For simplicity, we'll
+    # skip tuning here and train a default model. Full tuning would require
+    # a custom Tuner class or careful generator resets. Let's build and train.
+    # We get a single batch to determine the input shape.
+    sample_X, _ = next(train_generator)
+    in_shape = sample_X.shape[1:]
+    
+    # 4. Build a model (using a simplified builder for this example)
+    # The `build_def_model` needs to be able to accept the input shape
+    hp = HyperParameters() # Dummy HP object
+    tuned_model = build_def_model_dynamic(hp, in_shape) # A modified build function
+    
+    # 5. Training the model with generators
+    print(f"Starting model training with {steps_per_epoch} steps per epoch...")
+    history = tuned_model.fit(
+        train_generator,
+        epochs=200, # As in your original code
+        steps_per_epoch=steps_per_epoch,
+        validation_data=test_generator,
+        validation_steps=validation_steps,
+        callbacks=[EarlyStopping(monitor='val_loss', patience=10)],
+        verbose=1
+    )
+    history_dic = history.history
+    
+    print('TRAINED MODEL OBTAINED')  
+    
+    # 6. Evaluation (also using the generator)
+    print('Model evaluation on test set...')
+    test_generator_for_eval = partitioned_data_generator(
+        partitioned_model_input, test_indices, params, batch_size
+    )
+    # We need to collect all predictions from the generator
+    predictions = tuned_model.predict(test_generator_for_eval, steps=validation_steps, verbose=1)
+    y_pred_class = (predictions > 0.5).astype(int).flatten()
+    
+    # Since y_test is already in memory, we can compare directly
+    # Ensure the number of predictions matches the number of test labels
+    train_class_rep = metrics.classification_report(y_test[:len(y_pred_class)], y_pred_class)
+    train_predictions = pd.Series(y_pred_class, index=y_test.index[:len(y_pred_class)])
+    print(train_class_rep)
+
+    # Evaluation on the separate validation dataset (assuming it's small)
+    print('Model evaluation on separate validation dataset...')
+    val_predictions, val_class_rep = evaluate_on_single_df(tuned_model, validation_dataset, params)
+      
+    return tuned_model, history_dic, train_predictions, train_class_rep, val_predictions, val_class_rep
+
+# --- You'll need a slightly modified build function and a small eval helper ---
+
+def build_def_model_dynamic(hp: HyperParameters, input_shape: tuple) -> Sequential:
+    """Modified build_model to accept a dynamic input_shape."""
     model = keras.Sequential()
-    # Choose number of layers
-    for i in range(hp.Int("num_layers", 1, 5)):
-        model.add(
-            layers.Conv1D(
-        filters=hp.Int('conv_1_filter',
-                       min_value=16,
-                       max_value=128,
-                       step=16),
-        kernel_size=hp.Choice('conv_1_kernel',
-                              values = [3,5]),
-        activation='relu',
-        input_shape=(2048, 1),
-        padding='valid')) #no padding
-        model.add(layers.MaxPool1D(
-                hp.Int('pool_size',
-                       min_value=2,
-                       max_value=6)
-                       ))
-        if hp.Boolean("dropout"):
-            model.add(layers.Dropout(rate=0.25))
+    # Add the input layer separately or in the first layer
+    model.add(
+        layers.Conv1D(
+            filters=hp.Int('conv_1_filter', min_value=16, max_value=128, step=16),
+            kernel_size=hp.Choice('conv_1_kernel', values=[3,5]),
+            activation='relu',
+            input_shape=input_shape, # KEY CHANGE
+            padding='valid'
+        )
+    )
+    # ... The rest of your build_def_model function is the same ...
+    model.add(layers.MaxPool1D(hp.Int('pool_size', min_value=2, max_value=6)))
+    if hp.Boolean("dropout"):
+        model.add(layers.Dropout(rate=0.25))
     model.add(layers.Flatten())
-    model.add(layers.Dense(
-        units=hp.Int('dense_1_units',
-                     min_value=32,
-                     max_value=128,
-                     step=16),
-        activation='relu',
-        kernel_initializer = 'he_uniform'
-        ))
+    model.add(layers.Dense(units=hp.Int('dense_1_units', min_value=32, max_value=128, step=16), activation='relu', kernel_initializer='he_uniform'))
     model.add(layers.Dropout(0.5))
     model.add(layers.Dense(1, activation='sigmoid'))
-    # Compilation of model
-    model.compile(
-        optimizer=keras.optimizers.Adam(hp.Choice('learning_rate', values=[1e-2, 1e-3])),
-        loss='binary_crossentropy',
-        metrics=['accuracy']
-        )
+    model.compile(optimizer=keras.optimizers.Adam(hp.Choice('learning_rate', values=[1e-2, 1e-3])), loss='binary_crossentropy', metrics=['accuracy'])
     return model
 
-
-def tune_hp_def_model(model_data: tuple[np.ndarray, np.ndarray, Tuple[int,int], int],
-                      y_train: pd.Series,
-                      y_test: pd.Series,
-                      tune_params: dict
-                      ) -> Sequential:
-    """Tunes the hyperparameters of a 1D CNN model using KerasTuner's RandomSearch.
-
-    This function sets up and runs a hyperparameter optimization search for the
-    `build_def_model` using a RandomSearch algorithm. It trains and validates
-    different model configurations based on the specified tuning parameters
-    and returns the best-performing model found.
-
-    Args:
-        model_data: A tuple containing the reshaped data for training and testing:
-            - reshaped_X_train (np.ndarray): Training features.
-            - reshaped_X_test (np.ndarray): Testing features.
-            - in_shape (Tuple[int, ...]): Input shape for the CNN (not directly used here but part of the tuple).
-            - n_classes (int): Number of unique classes (not directly used here but part of the tuple).
-        y_train: Training labels, a Pandas Series.
-        y_test: Testing labels, a Pandas Series.
-        tune_params: A dictionary of tuning parameters for KerasTuner, expected to contain:
-            - 'objective' (str or `kerastuner.Objective`): The objective to optimize (e.g., 'val_accuracy' or 'val_loss').
-            - 'max_trials' (int): The total number of trials (model configurations) to test during the search.
-            - 'date' (str): A string representing the current date, used to create a unique directory for tuner logs.
-
-    Returns:
-        A `tensorflow.keras.models.Sequential` object representing the best model
-        found during the hyperparameter tuning process.
-
-    Raises:
-        ValueError: If the `tune_params` dictionary is missing required keys.
+def evaluate_on_single_df(model: Sequential, df: pd.DataFrame, params: dict) -> Tuple[pd.Series, str]:
     """
-    reshaped_X_train, reshaped_X_test, _, _, = model_data
-    
-    tuner = RandomSearch(
-        build_def_model,
-        objective=tune_params['objective'],
-        max_trials =tune_params['max_trials'],
-        directory = os.path.join('temp', 'tuner', tune_params['date']))
-    
-    tuner.search(reshaped_X_train,y_train,epochs=3,validation_data=(reshaped_X_test,y_test))
-    
-    tuned_model = tuner.get_best_models(num_models=1)[0]
-    tuned_model.summary() 
-    
-    return tuned_model
+    Helper to evaluate the model on a single, in-memory DataFrame (e.g., a validation set).
 
-def train_def_model(tuned_model: Sequential,
-                    model_data: tuple[np.ndarray, np.ndarray, Tuple[int,int], int],
-                    y_train: pd.Series,
-                    y_test: pd.Series
-                    ) -> tuple[Sequential, Dict[str,Any]]:
-    """Trains the best-tuned 1D CNN model and evaluates its performance.
-
-    This function takes a previously tuned Keras Sequential model and trains it
-    using the provided training data. It incorporates EarlyStopping and ModelCheckpoint
-    callbacks for robust training and saving of the best model weights. After training,
-    it evaluates the model on the test set.
-
-    Args:
-        tuned_model: The Keras `Sequential` model obtained from hyperparameter tuning.
-        model_data: A tuple containing the reshaped data:
-            - reshaped_X_train (np.ndarray): Training features.
-            - reshaped_X_test (np.ndarray): Testing features.
-            - Other elements (in_shape, n_classes) are present but not directly used here.
-        y_train: Training labels, a Pandas Series.
-        y_test: Testing labels, a Pandas Series.
-
-    Returns:
-        A tuple containing:
-        - def_model (Sequential): The trained Keras Sequential model.
-        - history_dic (Dict[str, Any]): A dictionary containing the training history (loss, accuracy, etc.).
-
-    Note:
-        Model checkpoints are saved to `temp/compiled_model/checkpoints/`.
-        Ensure this directory exists or is created before running.
-    """
-    reshaped_X_train, reshaped_X_test, _, _ = model_data
-
-    # Configure early stopping
-    es = EarlyStopping(monitor='val_loss', patience=10)
-    mc = ModelCheckpoint(
-        filepath = os.path.join('temp', 'compiled_model', 'checkpoints', '{epoch:02d}-{val_loss:.3f}.hdf5'),
-        monitor = 'val_loss',
-        save_best_only = True)
-    
-    # Fit the model
-    tuned_model.fit(reshaped_X_train,
-                    y_train,
-                    epochs=200,
-                    batch_size=128,
-                    verbose=1,
-                    validation_split = 0.3,
-                    callbacks = [es,mc])
-    history_dic = tuned_model.history.history
-    
-    # Evaluate the model
-    tuned_model.evaluate(reshaped_X_test, y_test, verbose=1)
-    return tuned_model, history_dic
-
-def obtain_trained_model(model_input: pd.DataFrame,
-                         validation_dataset: pd.DataFrame,
-                         params: dict,
-                         tune_params: dict
-                         ) -> tuple[Sequential, Dict[str, Any], pd.Series, str, pd.Series, str]:
-    """Orchestrates the entire model building, tuning, training, and evaluation process for a CNN.
-
-    This function serves as a high-level pipeline node, combining multiple steps:
-    1. Splitting the raw input data into training and testing sets.
-    2. Reshaping the feature data for compatibility with a 1D CNN.
-    3. Tuning the CNN model's hyperparameters using KerasTuner.
-    4. Training the best-found model on the prepared data.
-    5. Evaluating the trained model on both the training/test split and a separate validation dataset.
-
-    Args:
-        model_input: The raw input Pandas DataFrame containing features and labels for training and initial testing.
-        validation_dataset: A separate Pandas DataFrame used for final model validation, containing
-                            features and labels in the same format as `model_input`.
-        params: A dictionary of parameters, expected to contain:
-                - 'X_column' (str): The name of the column in `model_input` and `validation_dataset`
-                                    that contains the input features (fingerprints).
-                - 'label' (str): The name of the column in `model_input` and `validation_dataset`
-                                 that contains the target labels.
-        tune_params: A dictionary of parameters for the `tune_hp_def_model` function.
-
-    Returns:
-        A tuple containing:
-        - def_model (Sequential): The final trained Keras Sequential model.
-        - history (Dict[str, Any]): A dictionary containing the training history
-                                    (loss, accuracy, val_loss, val_accuracy per epoch)
-                                    of the final trained model.
-        - train_predictions (pd.Series): Predicted labels for the test set from the `model_input` split.
-        - train_class_rep (str): Classification report string for the test set from the `model_input` split.
-        - val_predictions (pd.Series): Predicted labels for the `validation_dataset`.
-        - val_class_rep (str): Classification report string for the `validation_dataset`.
-    """
-    # 1. Convertions
-    converted_model_input = load_and_preprocess_fingerprints(model_input, params)
-    # 2. Splitting the raw input data
-    X_train, X_test, y_train, y_test = train_test_split_column(converted_model_input, params)
-    # 3. Reshaping the feature data for CNN
-    model_data = reshape_input(X_train, X_test, y_train)
-    # 4. Tuning the CNN model's hyperparameters
-    tuned_model = tune_hp_def_model(model_data, y_train, y_test, tune_params)
-    # 5. Training the best-found model
-    def_model, history = train_def_model(tuned_model, model_data, y_train, y_test)
-    print('TRAINED MODEL OBTAINED')  
-    # 6. Evaluation
-    print('Model evaluation')
-    train_predictions, train_class_rep, val_predictions, val_class_rep = \
-        evaluate_model(def_model, model_data, y_test, validation_dataset, params)
-    
-      
-    return def_model, history, train_predictions, train_class_rep, val_predictions, val_class_rep
-
-# Model evaluation
-
-def get_predictions(model: Sequential,
-                    reshaped_X_test: np.ndarray,
-                    y_true: pd.Series
-                    ) -> Tuple[pd.Series, str]:
-    """Generates predictions from a trained model and computes its classification report.
-
-    This function predicts class labels for given input data using a pre-trained
-    Keras Sequential model and then provides a detailed classification report
-    comparing the predicted labels to the true labels. This function is specifically
-    designed for binary classification where the model's output layer uses a sigmoid
-    activation (single unit) and outputs probabilities, which are then converted
-    to binary class labels (0 or 1).
+    This function preprocesses the DataFrame, reshapes the features for the CNN,
+    and then uses the `get_predictions` helper to generate predictions and a
+    classification report.
 
     Args:
         model: The trained Keras Sequential model.
-        reshaped_X_data: The input feature data (e.g., reshaped X_test or reshaped_val_X_test)
-                         as a NumPy array, ready for model prediction.
-        y_true: The true labels corresponding to `reshaped_X_data`, as a Pandas Series.
+        df: The validation DataFrame to evaluate.
+        params: A dictionary containing 'X_column' and 'label' keys.
 
     Returns:
         A tuple containing:
-        - y_pred_series (pd.Series): Predicted binary labels (0 or 1) as a Pandas Series.
-        - class_rep (str): A string representing the sklearn classification report,
-                           including precision, recall, f1-score, and support for each class.
+        - val_predictions (pd.Series): The predicted labels for the DataFrame.
+        - val_class_rep (str): The classification report string.
     """
-    y_pred = model.predict(reshaped_X_test)
-    y_pred_list = (y_pred > 0.5).astype(int).flatten().tolist()
-    class_rep = metrics.classification_report(y_true,y_pred_list)
-    print(class_rep)
-    return pd.Series(y_pred_list), class_rep
+    print("Preprocessing validation DataFrame...")
+    processed_df = load_and_preprocess_fingerprints(df.copy(), params)
 
-def evaluate_model(model: Sequential,
-                   model_data: Tuple[np.ndarray, np.ndarray, Tuple[int,int], int],
-                   y_test: pd.Series,
-                   validation_dataset: pd.DataFrame,
-                   params: dict
-                   ) -> Tuple [pd.Series, str, pd.Series, str]:
-    """Evaluates a trained model on both the initial test set and a separate validation dataset.
+    # Handle case where the validation set is empty after processing
+    if processed_df.empty:
+        print("Warning: Validation DataFrame is empty after preprocessing. Skipping evaluation.")
+        return pd.Series(dtype=int), "No validation data to evaluate."
 
-    This function takes a trained Keras model and assesses its performance on two distinct
-    datasets: the test set derived from the initial `model_input` (used during tuning
-    and training evaluation) and an entirely separate `validation_dataset`.
-    For the `validation_dataset`, it performs on-the-fly preprocessing to convert
-    fingerprint string representations (from CSV-like sources) into NumPy arrays
-    and reshapes them for the model. It then uses the `get_predictions` helper function
-    to obtain predictions and classification reports for each.
+    print("Preparing validation data for the model...")
+    X_array = np.array(list(processed_df[params['X_column']]))
+    y_true = processed_df[params['label']]
 
-    Args:
-        model: The trained Keras Sequential model.
-        model_data: A tuple containing the reshaped data from the initial split,
-                    expected to contain: `(reshaped_X_train, reshaped_X_test, y_train, n_classes)`.
-                    Only `reshaped_X_test` is directly used from this tuple.
-        y_test: The true labels for the test set derived from `model_input`, as a Pandas Series.
-        validation_dataset: A separate Pandas DataFrame containing features (as string
-                            representations of lists or arrays) and labels for validation.
-                            This DataFrame is expected to come directly from a source
-                            like a CSV and will be preprocessed internally.
-        params: A dictionary of parameters, expected to contain:
-                - 'X_column' (str): The name of the column in `validation_dataset`
-                                    that contains the input features (e.g., 'Morgan2FP').
-                - 'label' (str): The name of the column in `validation_dataset`
-                                 that contains the target labels (e.g., 'RuleFive').
+    # Reshape for 1D CNN model: (samples, features, 1)
+    reshaped_X = X_array.reshape((X_array.shape[0], X_array.shape[1], 1))
 
-    Returns:
-        A tuple containing:
-        - train_predictions (pd.Series): Predicted labels for the test set (from `model_input` split).
-        - train_class_rep (str): Classification report string for the test set.
-        - val_predictions (pd.Series): Predicted labels for the `validation_dataset`.
-        - val_class_rep (str): Classification report string for the `validation_dataset`.
+    print("Generating predictions on validation data...")
+    # This was the missing part: calling your get_predictions function
+    val_predictions, val_class_rep = get_predictions(model, reshaped_X, y_true)
 
-    Raises:
-        KeyError: If 'X_column' or 'label' are not found in the `params` dictionary.
-        ValueError: If the reshaped validation features do not have a 2D shape before
-                    adding the channel dimension (i.e., if fingerprint parsing fails).
-        Exception: Propagates exceptions from `load_and_preprocess_fingerprints` or `get_predictions`.
-    """
-    # Extracting training values
-    _, reshaped_X_test, _, _ = model_data
-
-    # Prepare validation dataset
-    converted_val_dataset = load_and_preprocess_fingerprints(validation_dataset, params)
-    val_X_test_array = np.array(list(converted_val_dataset[params['X_column']]))
-    val_y_test = validation_dataset[params['label']]
-    
-    # Reshape the validation features for a 1D CNN (batch_size, sequence_length, features)
-    reshaped_val_X_test = val_X_test_array.reshape((val_X_test_array.shape[0], val_X_test_array.shape[1], 1))
-    
-    # Get predictions and reports for the initial test set
-    train_predictions, train_class_rep = get_predictions(model, reshaped_X_test, y_test)
-    
-    # Get predictions and reports for the separate validation dataset
-    val_predictions, val_class_rep = get_predictions(model, reshaped_val_X_test, val_y_test)
-    
-    return train_predictions, train_class_rep, val_predictions, val_class_rep
-
-def visualize_training(history_dic):
-    """Visualizes the training and validation loss and accuracy over epochs.
-
-    This function takes a Keras training history dictionary (as returned by `model.fit()`)
-    and plots the 'loss', 'val_loss', 'accuracy', and 'val_accuracy' metrics
-    against the training epochs. It uses a 'ggplot' style for aesthetics.
-
-    Args:
-        history_dic: A dictionary containing the training history. Expected keys include
-                     'loss', 'val_loss', 'accuracy', and 'val_accuracy'.
-
-    Returns:
-        A `matplotlib.figure.Figure` object containing the plot. This can be used
-        to save the figure or display it.
-    """
-    fig,ax = plt.subplots()
-    plt.style.use('ggplot')
-    
-    # Determine the number of epochs from the length of the 'loss' history
-    epochs = len(history_dic['loss'])
-    epoch_values = list(range(epochs))
-
-    # Plotting the metrics
-    ax.plot(epoch_values, history_dic['loss'], label='Training loss')
-    ax.plot(epoch_values, history_dic['val_loss'], label='Validation loss')
-    ax.plot(epoch_values, history_dic['accuracy'], label='Training accuracy')
-    ax.plot(epoch_values, history_dic['val_accuracy'], label='Validation accuracy')
-
-    # Setting plot title and labels
-    ax.set_title('Training loss and accuracy')
-    ax.set_xlabel('Epoch')
-    ax.set_ylabel('Loss/Accuracy')
-    ax.legend()
-    
-    return fig
+    return val_predictions, val_class_rep

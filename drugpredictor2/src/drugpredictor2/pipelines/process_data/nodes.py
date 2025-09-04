@@ -1,10 +1,11 @@
-import gzip
-import io
+import traceback
+import os
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from rdkit import Chem
-from rdkit.Chem import AllChem, PandasTools as pt, Descriptors
-from typing import Optional, Tuple, List, Dict, Any
+from rdkit.Chem import AllChem, PandasTools as pt
+from typing import Optional, Callable, Dict, Set, Any
 
 # --- Core functions ---
 def compute_morgan_fp(mol: Chem.Mol, depth: int = 2, nBits: int = 2048) -> Optional[np.ndarray]:
@@ -72,6 +73,7 @@ def add_RDKit_mol(df: pd.DataFrame) -> pd.DataFrame:
     df.dropna(subset=[calculated_column], inplace=True)
     if len(df) < initial_mol_len:
         print(f"Dropped {initial_mol_len - len(df)} rows in due to failed molecule conversion in file.")
+    return df
 
 def add_fingerprints(df: pd.DataFrame) -> pd.DataFrame:
     base_column = 'RDKit_Molecule'
@@ -93,67 +95,77 @@ def add_fingerprints(df: pd.DataFrame) -> pd.DataFrame:
 
 # --- Processes a single raw SDF file from start to finish ---
 
-def process_single_raw_sdf_to_fingerprints(
-    sdf_partition: dict
-) -> pd.DataFrame:
+def get_existing_fnames(directory_path: str) -> Set[str]:
     """
-    Processes a single gzipped SDF file content into a DataFrame with fingerprints.
-    
+    Scans a directory for processed files and returns a set of their
+    base filenames (stems), ignoring extensions.
+
     Args:
-        sdf_content: The gzipped SDF file content as bytes
-        file_id: The identifier for this file (from partitioned dataset)
-        
+        directory_path: The path to the folder containing already
+                        processed files (e.g., 'featurized_data').
+
     Returns:
-        Processed DataFrame with molecular properties and fingerprints
+        A set of base filenames found in the directory.
     """
-    try:
-        sdf_content = sdf_partition['data']
-        with gzip.open(io.BytesIO(sdf_content), 'rb') as gz:
-            supplier = Chem.ForwardSDMolSupplier(gz)
-            data = []
-            for i, mol in enumerate(supplier):
-                if mol is None:
-                    print(f"Warning: Skipping invalid molecule in file at index {i}")
-                    continue
-                try:
-                    data.append({
-                        "SMILES": Chem.MolToSmiles(mol),
-                        "Molecular Weight": Descriptors.MolWt(mol),
-                        "H-Bond Donors": Chem.Lipinski.NumHDonors(mol),
-                        "H-Bond Acceptors": Chem.Lipinski.NumHAcceptors(mol),
-                        "LogP": Descriptors.MolLogP(mol)
-                    })
-                except Exception as e:
-                    print(f"Error processing molecule {i+1} in file: {e}")
+    processed_dir = Path(directory_path)
+    if not processed_dir.is_dir():
+        print(f"Directory '{directory_path}' not found. Assuming no files exist.")
+        return set()
+    
+    existing_fnames = {p.stem for p in processed_dir.iterdir() if p.is_file()}
+    
+    print(f"Found {len(existing_fnames)} already processed files in '{directory_path}'.")
+    return existing_fnames
 
-            if not data:
-                return pd.DataFrame()
+def process_new_partitions(
+    partitions_dict: Dict[str, Callable[[], pd.DataFrame]],
+    existing_fnames: Set[str]
+) -> Dict[str, pd.DataFrame]:
+    """
+    Processes only the new partitions that do not have a corresponding output file.
 
-            df = pd.DataFrame(data)
-            df_with_lip = is_lipinski(df)
+    It compares the base name of the raw files (from partitions_dict keys)
+    against the base names of existing processed files.
+
+    Args:
+        partitions_dict: A dictionary of all raw partitions.
+                         Keys are full filenames (e.g., 'my_file.csv').
+                         Values are the loading functions.
+        existing_fnames: A set of base filenames that are already processed,
+                         as returned by get_existing_fnames().
+
+    Returns:
+        A dictionary containing only the newly processed DataFrames, where keys
+        are the base filenames.
+    """
+    processed_data = {}
+    print(f"Received {len(partitions_dict)} total raw partitions. Checking against {len(existing_fnames)} existing processed files.")
+
+    for raw_filename, partition_load_func in partitions_dict.items():
+        # Get the base name of the raw file to compare with existing files.
+        partition_stem = Path(raw_filename).stem
+
+        # SKIP if the base name is in the existing set
+        if partition_stem in existing_fnames:
+            continue
+
+        print(f"--- Processing NEW partition: {raw_filename} ---")
+        try:
+            partition_df = partition_load_func()
+
+            # Apply the sequence of transformations
+            df_with_lip = is_lipinski(partition_df)
             df_with_mol = add_RDKit_mol(df_with_lip)
-            df_with_fp = add_fingerprints(df_with_mol)
+            final_df = add_fingerprints(df_with_mol)
             
-            return df_with_fp
+            processed_data[partition_stem] = final_df
+            print(f"Successfully processed new partition: {partition_stem}")
 
-    except Exception as e:
-        print(f"Error processing file: {e}")
-        return pd.DataFrame()
+        except Exception as e:
+            print(f"ERROR: Failed to process new partition {raw_filename}. Error: {e}")
+            traceback.print_exc()
 
+    if not processed_data:
+        print("No new partitions to process.")
         
-""" def process_partition_with_id(partition: Tuple[str, Any]) -> pd.DataFrame:
-    Wrapper to extract key and value from partitioned dataset.
-    partition_key, data = partition
-    return process_single_raw_sdf_to_fingerprints(raw_sdf_file_path=data, file_id=partition_key)
-
- """
-
-""" # --- Dummy initializations ---
-def create_empty_fingerprint_dataframe() -> pd.DataFrame:
-    Creates an empty DataFrame with the expected columns for final 
-    fingerprints.
-    # Define columns that will be in your final fingerprint DataFrame
-    return pd.DataFrame(columns=[
-        'SMILES', 'Molecular Weight', 'H-Bond Donors', 'H-Bond Acceptors',
-        'LogP', 'RuleFive', 'OriginalFileID', 'Morgan2FP'
-    ]) """
+    return processed_data

@@ -1,9 +1,9 @@
-raw_sdf_files:
+raw_csv_files:
   type: PartitionedDataSet
-  path: data/01_raw/sdf_files
-  filename_suffix: ".sdf.gz"  # Add this line
+  path: data/01_raw/csv_files
+  filename_suffix: ".csv"
   dataset:
-    type: kedro.extras.datasets.text.TextDataSet  # For raw bytes
+    type: pandas.CSVDataSet
 
 featurized_data:
   type: PartitionedDataSet
@@ -16,4 +16,6 @@ featurized_data:
 processed_sample:
   type: pandas.ParquetDataSet
   filepath: data/03_primary/processed_sample.parquet
+
+
 
