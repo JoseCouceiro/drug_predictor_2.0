@@ -1,28 +1,30 @@
-from kedro.pipeline import Pipeline, node, pipeline
-from .nodes import obtain_trained_model, visualize_training
+# Refined and correct pipeline definition
+from kedro.pipeline import Pipeline, node
+from typing import Dict
+
+# Only the main orchestration function needs to be imported here
+from .nodes import train_model_on_partitions
 
 def create_pipeline(**kwargs) -> Pipeline:
-    return pipeline(
+    return Pipeline(
         [
-        node(
-          func=obtain_trained_model,
-          inputs=["model_input_mock",
-                  "validation_dataset_mock",
-                  "params:X_y_split",
-                  "params:tune_model"],
-          outputs=["def_model",
-                   "history",
-                   "train_predictions",
-                   "train_classification_report",
-                   "validation_predictions",
-                   "validation_classification_report"],
-          name="obtain_trained_model_node",   
-        ),
-        node(
-          func=visualize_training,
-          inputs='history',
-          outputs='training_fig',
-          name='visualization_node'
-        )
-      ]
+            node(
+                func=train_model_on_partitions,
+                inputs=[
+                    "featurized_data",
+                    "params:train_params",
+                    "params:split_params",
+                    "params:tune_params" ,
+                ],
+                outputs=[
+                    "trained_model",
+                    "training_history",
+                    "train_predictions",
+                    "train_report",
+                    "val_predictions",
+                    "val_report"
+                ],
+                name="train_model_on_partitions_node"
+            )
+        ]
     )

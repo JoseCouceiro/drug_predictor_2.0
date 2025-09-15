@@ -46,60 +46,65 @@ def load_and_preprocess_fingerprints(model_input: pd.DataFrame,
 
     return model_input
 
-def create_train_test_indices(
-    partition_loaders: Dict[str, Callable[[], pd.DataFrame]],
-    params: Dict[str, str],
-    test_size: float = 0.3,
-    random_state: int = 42
-) -> Tuple[Set[int], Set[int], pd.Series, pd.Series]:
+def create_train_val_test_indices(
+    partitioned_model_input: Dict[str, Callable[[], pd.DataFrame]],
+    params: dict
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Performs a memory-efficient, stratified train-test split.
-
-    This function scans all partitions, loading ONLY the label column to build a
-    lightweight metadata DataFrame. It then performs a stratified split on this
-    metadata to get global indices for the train and test sets.
-
-    Args:
-        partition_loaders: The PartitionedDataSet dictionary of loaders.
-        params: Dictionary containing the 'label' column name.
-        test_size: The proportion of the dataset to include in the test split.
-        random_state: Seed for reproducibility.
+    Generate train/val/test indices and corresponding labels without
+    loading all partitions into memory at once.
 
     Returns:
-        A tuple containing:
-        - train_indices (Set[int]): A set of global indices for the training set.
-        - test_indices (Set[int]): A set of global indices for the test set.
-        - y_train (pd.Series): The labels for the training set.
-        - y_test (pd.Series): The labels for the test set.
+        train_indices, val_indices, test_indices: arrays of global row indices
+        y_train, y_val, y_test: arrays of labels aligned with indices
     """
-    print("Pass 1: Scanning partitions to create train/test split indices...")
-    
-    metadata_list = []
-    # This loop loads only the necessary column and should be memory-light.
-    for partition_name, load_func in partition_loaders.items():
-        # Here we assume load_func() can be modified or that loading a full partition
-        # and immediately subsetting it is acceptable for a moment.
-        # For very large CSVs, you can optimize by reading only specific columns.
-        df = load_func()
-        metadata_list.append(df[[params['label']]])
-    
-    # Concatenate only the label data, which is small.
-    full_metadata = pd.concat(metadata_list, ignore_index=True)
-    
-    # Create a dummy X with the correct index for splitting
-    X_indices = full_metadata.index.to_series()
-    y_labels = full_metadata[params['label']]
-    
-    # Perform a stratified split on the indices
-    train_indices_df, test_indices_df, y_train, y_test = train_test_split(
-        X_indices, y_labels, test_size=test_size, random_state=random_state, stratify=y_labels
-    )
-    
-    print(f"Split complete. Train samples: {len(train_indices_df)}, Test samples: {len(test_indices_df)}")
-    
-    # Return as sets for fast O(1) lookups in the generator
-    return set(train_indices_df), set(test_indices_df), y_train, y_test
 
+    y_column = params["y_column"]
+    val_size = params["val_size"]
+    test_size = params["test_size"]
+
+    all_indices = []
+    all_labels = []
+
+    offset = 0  # To create global indices across partitions
+
+    # Loop through partitions without loading all data at once
+    for partition_name, loader_fn in partitioned_model_input.items():
+        df = loader_fn()  # Load this partition
+        n_rows = len(df)
+        indices = np.arange(offset, offset + n_rows)
+        labels = df[y_column].to_numpy()
+
+        all_indices.append(indices)
+        all_labels.append(labels)
+
+        offset += n_rows
+        del df  # free memory
+
+    all_indices = np.concatenate(all_indices)
+    all_labels = np.concatenate(all_labels)
+
+    # Shuffle indices
+    rng = np.random.default_rng()
+    shuffled_idx = rng.permutation(len(all_indices))
+    all_indices = all_indices[shuffled_idx]
+    all_labels = all_labels[shuffled_idx]
+
+    # Compute split sizes
+    n_total = len(all_indices)
+    n_test = int(n_total * test_size)
+    n_val = int(n_total * val_size)
+    n_train = n_total - n_val - n_test
+
+    train_indices = all_indices[:n_train]
+    val_indices = all_indices[n_train:n_train+n_val]
+    test_indices = all_indices[n_train+n_val:]
+
+    y_train = pd.Series(all_labels[:n_train])
+    y_val = pd.Series(all_labels[n_train:n_train+n_val])
+    y_test = pd.Series(all_labels[n_train+n_val:])
+
+    return train_indices, val_indices, test_indices, y_train, y_val, y_test
 
 def partitioned_data_generator(
     partition_loaders: Dict[str, Callable[[], pd.DataFrame]],
@@ -176,8 +181,8 @@ def partitioned_data_generator(
 
 def train_model_on_partitions(
     partitioned_model_input: Dict[str, Callable[[], pd.DataFrame]],
-    validation_dataset: pd.DataFrame, # Assuming validation set is small and fits in memory
-    params: dict,
+    train_params: dict,
+    split_params: dict,
     tune_params: dict,
     batch_size: int = 128
 ) -> tuple:
@@ -186,16 +191,19 @@ def train_model_on_partitions(
     for partitioned data.
     """
     # 1. Get global train/test split indices without loading all data
-    train_indices, test_indices, y_train, y_test = create_train_test_indices(
-        partitioned_model_input, params
+    train_indices, val_indices, test_indices, y_train, y_val, y_test = create_train_val_test_indices(
+        partitioned_model_input, split_params
     )
     
     # 2. Create data generators
     train_generator = partitioned_data_generator(
-        partitioned_model_input, train_indices, params, batch_size
+        partitioned_model_input, train_indices, split_params, batch_size
+    )
+    val_generator = partitioned_data_generator(
+        partitioned_model_input, val_indices, split_params, batch_size
     )
     test_generator = partitioned_data_generator(
-        partitioned_model_input, test_indices, params, batch_size
+        partitioned_model_input, test_indices, split_params, batch_size
     )
 
     # 3. Calculate steps for Keras
@@ -215,42 +223,51 @@ def train_model_on_partitions(
     tuned_model = build_def_model_dynamic(hp, in_shape) # A modified build function
     
     # 5. Training the model with generators
-    print(f"Starting model training with {steps_per_epoch} steps per epoch...")
     history = tuned_model.fit(
         train_generator,
-        epochs=200, # As in your original code
+        epochs=200,
         steps_per_epoch=steps_per_epoch,
-        validation_data=test_generator,
+        validation_data=val_generator,
         validation_steps=validation_steps,
-        callbacks=[EarlyStopping(monitor='val_loss', patience=10)],
-        verbose=1
+        callbacks=[EarlyStopping(monitor="val_loss", patience=10)],
+        verbose=2
     )
-    history_dic = history.history
-    
-    print('TRAINED MODEL OBTAINED')  
-    
-    # 6. Evaluation (also using the generator)
-    print('Model evaluation on test set...')
-    test_generator_for_eval = partitioned_data_generator(
-        partitioned_model_input, test_indices, params, batch_size
+
+    # 6. Explicit evaluation on validation set
+    print("Model evaluation on validation set...")
+    val_steps = math.ceil(len(val_indices) / batch_size)
+    val_predictions = tuned_model.predict(val_generator, steps=val_steps, verbose=1)
+    val_pred_class = (val_predictions > 0.5).astype(int).flatten()
+
+    val_predictions = pd.DataFrame({
+        "y_true": y_val[:len(val_pred_class)],
+        "y_pred": val_pred_class
+    })
+
+    val_class_rep = metrics.classification_report(
+        y_val[:len(val_pred_class)], val_pred_class
     )
-    # We need to collect all predictions from the generator
-    predictions = tuned_model.predict(test_generator_for_eval, steps=validation_steps, verbose=1)
+
+    # 7. Evaluation on test set
+    print("Model evaluation on test set...")
+    test_steps = math.ceil(len(test_indices) / batch_size)
+    predictions = tuned_model.predict(test_generator, steps=test_steps, verbose=1)
     y_pred_class = (predictions > 0.5).astype(int).flatten()
-    
-    # Since y_test is already in memory, we can compare directly
-    # Ensure the number of predictions matches the number of test labels
     train_class_rep = metrics.classification_report(y_test[:len(y_pred_class)], y_pred_class)
-    train_predictions = pd.Series(y_pred_class, index=y_test.index[:len(y_pred_class)])
-    print(train_class_rep)
+    train_predictions = pd.DataFrame({
+        "y_true": y_test[:len(y_pred_class)],
+        "y_pred": y_pred_class
+    })
 
-    # Evaluation on the separate validation dataset (assuming it's small)
-    print('Model evaluation on separate validation dataset...')
-    val_predictions, val_class_rep = evaluate_on_single_df(tuned_model, validation_dataset, params)
-      
-    return tuned_model, history_dic, train_predictions, train_class_rep, val_predictions, val_class_rep
-
-# --- You'll need a slightly modified build function and a small eval helper ---
+    # 8. Return all outputs
+    return (
+        tuned_model,
+        history.history,
+        train_predictions,
+        train_class_rep,
+        val_predictions,
+        val_class_rep,
+    )
 
 def build_def_model_dynamic(hp: HyperParameters, input_shape: tuple) -> Sequential:
     """Modified build_model to accept a dynamic input_shape."""
@@ -275,6 +292,37 @@ def build_def_model_dynamic(hp: HyperParameters, input_shape: tuple) -> Sequenti
     model.add(layers.Dense(1, activation='sigmoid'))
     model.compile(optimizer=keras.optimizers.Adam(hp.Choice('learning_rate', values=[1e-2, 1e-3])), loss='binary_crossentropy', metrics=['accuracy'])
     return model
+
+def get_predictions(model: Sequential,
+                    reshaped_X_test: np.ndarray,
+                    y_true: pd.Series
+                    ) -> Tuple[pd.Series, str]:
+    """Generates predictions from a trained model and computes its classification report.
+
+    This function predicts class labels for given input data using a pre-trained
+    Keras Sequential model and then provides a detailed classification report
+    comparing the predicted labels to the true labels. This function is specifically
+    designed for binary classification where the model's output layer uses a sigmoid
+    activation (single unit) and outputs probabilities, which are then converted
+    to binary class labels (0 or 1).
+
+    Args:
+        model: The trained Keras Sequential model.
+        reshaped_X_data: The input feature data (e.g., reshaped X_test or reshaped_val_X_test)
+                         as a NumPy array, ready for model prediction.
+        y_true: The true labels corresponding to `reshaped_X_data`, as a Pandas Series.
+
+    Returns:
+        A tuple containing:
+        - y_pred_series (pd.Series): Predicted binary labels (0 or 1) as a Pandas Series.
+        - class_rep (str): A string representing the sklearn classification report,
+                           including precision, recall, f1-score, and support for each class.
+    """
+    y_pred = model.predict(reshaped_X_test)
+    y_pred_list = (y_pred > 0.5).astype(int).flatten().tolist()
+    class_rep = metrics.classification_report(y_true,y_pred_list)
+    print(class_rep)
+    return pd.Series(y_pred_list), class_rep
 
 def evaluate_on_single_df(model: Sequential, df: pd.DataFrame, params: dict) -> Tuple[pd.Series, str]:
     """

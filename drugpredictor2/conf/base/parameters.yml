@@ -1,1 +1,20 @@
 featurized_data_path: data/05_model_input/featurized_data
+
+fingerprints_params:
+  X_column: Morgan2FP
+
+train_params:
+  label: 'RuleFive'
+  X_column: 'Morgan2FP'
+
+tune_params:
+  objective: 'val_loss'
+  max_trials : 5
+  date: '230714_09'
+
+split_params:
+  label: 'RuleFive'
+  X_column: 'Morgan2FP'
+  y_column: 'RuleFive'
+  val_size: 0.1
+  test_size: 0.1

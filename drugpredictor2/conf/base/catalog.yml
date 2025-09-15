@@ -17,5 +17,37 @@ processed_sample:
   type: pandas.ParquetDataSet
   filepath: data/03_primary/processed_sample.parquet
 
+# Trained Keras model
+trained_model:
+  type: pickle.PickleDataSet
+  filepath: data/06_models/trained_model.pkl
+  backend: pickle
+
+# Training history (includes training & validation metrics per epoch)
+training_history:
+  type: json.JSONDataSet
+  filepath: data/08_reporting/training_history.json
+
+# Predictions on the training/test set
+train_predictions:
+  type: pandas.CSVDataSet
+  filepath: data/07_model_output/train_predictions.csv
+
+# Classification report on the training/test set
+train_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/train_report.txt
+
+# Predictions on the validation set
+val_predictions:
+  type: pandas.CSVDataSet
+  filepath: data/07_model_output/val_predictions.csv
+
+# Classification report on the validation set
+val_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/val_report.txt
+
+
 
 
