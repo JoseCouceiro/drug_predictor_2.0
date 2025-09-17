@@ -10,12 +10,7 @@ featurized_data:
   path: data/05_model_input/featurized_data
   dataset:
     type: pandas.ParquetDataSet
-    filepath: dummy.parquet  # This will be ignored - path is determined by PartitionedDataSet
-
-# For local testing you might want to add this:
-processed_sample:
-  type: pandas.ParquetDataSet
-  filepath: data/03_primary/processed_sample.parquet
+    filepath: dummy.parquet
 
 # Trained Keras model
 trained_model:

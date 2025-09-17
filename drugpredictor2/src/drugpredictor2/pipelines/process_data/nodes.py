@@ -34,8 +34,8 @@ def compute_morgan_fp(mol: Chem.Mol, depth: int = 2, nBits: int = 2048) -> Optio
     except Exception as e:
         return None
 
-def is_lipinski(x: pd.DataFrame) -> pd.DataFrame:
-    """Applies Lipinski's Rule of Five to a DataFrame of molecular properties.
+""" def is_lipinski(x: pd.DataFrame) -> pd.DataFrame:
+    Applies Lipinski's Rule of Five to a DataFrame of molecular properties.
 
     Calculates whether a molecule adheres to at least three of the four main
     Lipinski rules (MW < 500, LogP <= 5, H-Bond Donors <= 5,
@@ -48,7 +48,7 @@ def is_lipinski(x: pd.DataFrame) -> pd.DataFrame:
 
     Returns:
         The input DataFrame with an added 'RuleFive' integer column.
-    """
+   
     # Lipinski rules
     hdonor = x['H-Bond Donors'] <= 5
     haccept = x['H-Bond Acceptors'] <= 10
@@ -57,7 +57,7 @@ def is_lipinski(x: pd.DataFrame) -> pd.DataFrame:
     # Apply rules to dataframe
     x['RuleFive'] = np.where(((hdonor & haccept & mw) | (hdonor & haccept & clogP) | (hdonor & mw & clogP) | (haccept & mw & clogP)), 1, 0)
     return x
-
+ """
 def add_RDKit_mol(df: pd.DataFrame) -> pd.DataFrame:
     base_column = 'SMILES'
     calculated_column = 'RDKit_Molecule'
@@ -154,8 +154,8 @@ def process_new_partitions(
             partition_df = partition_load_func()
 
             # Apply the sequence of transformations
-            df_with_lip = is_lipinski(partition_df)
-            df_with_mol = add_RDKit_mol(df_with_lip)
+            #df_with_lip = is_lipinski(partition_df)
+            df_with_mol = add_RDKit_mol(partition_df)
             final_df = add_fingerprints(df_with_mol)
             
             processed_data[partition_stem] = final_df
