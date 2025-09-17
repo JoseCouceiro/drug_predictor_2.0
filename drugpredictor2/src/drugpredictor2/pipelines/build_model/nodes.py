@@ -230,7 +230,7 @@ def train_model_on_partitions(
         validation_data=val_generator,
         validation_steps=validation_steps,
         callbacks=[EarlyStopping(monitor="val_loss", patience=10)],
-        verbose=2
+        verbose=1
     )
 
     # 6. Explicit evaluation on validation set
