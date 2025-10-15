@@ -1,372 +1,314 @@
 import math
 import numpy as np
 import pandas as pd
-import os
-import ast
-import warnings
-warnings.filterwarnings('ignore', category=DeprecationWarning)
-import matplotlib.pyplot as plt
+from typing import Dict, Callable, Iterator, Tuple, List
+
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
-from keras_tuner import RandomSearch, HyperParameters
+
 from tensorflow import keras
 from tensorflow.keras import layers
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Conv1D, MaxPool1D, Flatten, Dropout
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
-from typing import Dict, Callable, Iterator, Tuple, Set
+from keras_tuner import HyperParameters
 
-def load_and_preprocess_fingerprints(model_input: pd.DataFrame,
-                                     params: dict
-                                    ) -> pd.DataFrame:
+
+# --------------------------
+# Preprocessing
+# --------------------------
+
+def load_and_preprocess_fingerprints(df: pd.DataFrame, params: dict) -> pd.DataFrame:
     """
-    Prepares fingerprint data for the model, assuming input is NumPy arrays.
-
-    This function takes a DataFrame where the fingerprint column contains
-    NumPy arrays of booleans (loaded from Parquet) and efficiently converts
-    them into arrays of integers (0s and 1s). It also removes any rows
-    with missing fingerprint data.
-
-    Args:
-        model_input: A DataFrame where `params['X_column']` contains
-                     NumPy arrays of booleans.
-        params: A dictionary expecting the key 'X_column'.
-
-    Returns:
-        A DataFrame with fingerprints as NumPy arrays of integers, with
-        null rows dropped.
+    Keep rows with non-null fingerprints; cast to float32 for Keras Conv1D.
     """
-    x_col = params['X_column']
+    x_col = params["X_column"]
+    # drop rows where the fingerprint is missing
+    df = df.dropna(subset=[x_col]).copy()
+    # ensure numpy arrays of dtype float32 (from bool/ints)
+    df[x_col] = df[x_col].apply(lambda fp: np.asarray(fp, dtype=np.float32))
+    return df
 
-    # Drop any rows that might have missing fingerprints.
-    model_input.dropna(subset=[x_col], inplace=True)
 
-    # Efficiently convert the boolean arrays to integer arrays.
-    model_input[x_col] = model_input[x_col].apply(lambda fp: fp.astype(int))
+# --------------------------
+# Index discovery & splits
+# --------------------------
 
-    return model_input
+def _discover_valid_rows(partition_loaders: Dict[str, Callable[[], pd.DataFrame]], params: dict):
+    """
+    Return (valid_global_indices_sorted, valid_labels_series) where 'valid'
+    means rows that survive the same preprocessing keep/drop rule.
+    """
+    x_col, y_col = params["X_column"], params["label"]
 
-# REVISED create_train_val_test_indices
+    labels = []
+    keep_masks = []
+    total = 0
+    # dict preserves insertion order in py>=3.7
+    for load in partition_loaders.values():
+        df = load()
+        labels.append(df[y_col])
+        keep_masks.append(df[x_col].notna())
+        total += len(df)
+
+    labels = pd.concat(labels, ignore_index=True)
+    keep = pd.concat(keep_masks, ignore_index=True)
+
+    valid_idx = np.flatnonzero(keep.values)
+    valid_labels = labels.iloc[valid_idx].reset_index(drop=True)
+    return valid_idx, valid_labels
+
+
 def create_train_val_test_indices(
     partitioned_model_input: Dict[str, Callable[[], pd.DataFrame]],
-    params: dict
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]: # <-- Note the changed return type
+    params: dict,
+) -> Tuple[List[int], List[int], List[int]]:
     """
-    Generate shuffled train/val/test indices without loading all labels.
+    Stratified split on rows that will actually be used.
+    Returns sorted lists of global indices.
     """
-    y_column = params["y_column"]
     val_size = params["val_size"]
     test_size = params["test_size"]
-    
-    # We need to load labels to do a stratified split, which is best practice.
-    all_labels = []
-    total_rows = 0
-    for loader_fn in partitioned_model_input.values():
-        df = loader_fn()
-        all_labels.append(df[y_column])
-        total_rows += len(df)
-        del df
 
-    all_labels = pd.concat(all_labels, ignore_index=True)
-    all_indices = np.arange(total_rows)
+    valid_idx, valid_labels = _discover_valid_rows(partitioned_model_input, params)
+    print(valid_labels.value_counts())
 
-    # Use train_test_split for a robust, stratified split
-    train_val_indices, test_indices = train_test_split(
-        all_indices,
+    train_val_idx, test_idx = train_test_split(
+        valid_idx,
         test_size=test_size,
-        stratify=all_labels, # Stratify to maintain class balance
-        random_state=42
+        stratify=valid_labels,
+        random_state=25,
     )
 
-    # We need to get the labels for the remaining part to stratify the val split
-    train_val_labels = all_labels.iloc[train_val_indices]
-    
-    # Adjust val_size relative to the remaining data
-    relative_val_size = val_size / (1.0 - test_size)
+    # labels for remaining (train+val)
+    pos_in_valid = np.searchsorted(valid_idx, np.sort(train_val_idx))
+    remain_labels = valid_labels.iloc[pos_in_valid]
 
-    train_indices, val_indices = train_test_split(
-        train_val_indices,
-        test_size=relative_val_size,
-        stratify=train_val_labels,
-        random_state=42
+    rel_val = val_size / (1.0 - test_size)
+    train_idx, val_idx = train_test_split(
+        train_val_idx,
+        test_size=rel_val,
+        stratify=remain_labels,
+        random_state=42,
     )
-    
-    print(f"Dataset split: Train={len(train_indices)}, Val={len(val_indices)}, Test={len(test_indices)}")
 
-    # Return only the index sets
-    return train_indices, val_indices, test_indices
+    train_idx = sorted(train_idx.tolist())
+    val_idx   = sorted(val_idx.tolist())
+    test_idx  = sorted(test_idx.tolist())
 
-def partitioned_data_generator(
+    print(f"Dataset split (valid rows only): Train={len(train_idx)}, Val={len(val_idx)}, Test={len(test_idx)}")
+    return train_idx, val_idx, test_idx
+
+
+# --------------------------
+# Generators (deterministic)
+# --------------------------
+
+def _partition_spans(partition_loaders: Dict[str, Callable[[], pd.DataFrame]]):
+    """Return list of (name, start, end) global spans per partition, in insertion order."""
+    spans, total = [], 0
+    for name, load in partition_loaders.items():
+        n = len(load())
+        spans.append((name, total, total + n))
+        total += n
+    return spans
+
+
+def infinite_train_generator(
     partition_loaders: Dict[str, Callable[[], pd.DataFrame]],
-    indices_to_use: Set[int],
+    ordered_indices: List[int],
     params: Dict[str, str],
-    batch_size: int
+    batch_size: int,
+    shuffle_each_epoch: bool = False,
 ) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
     """
-    A generator that loads and yields batches of data for a given set of indices.
-
-    It iterates through partitions one by one, processes them, filters rows
-    based on `indices_to_use`, and yields batches of a specified size.
-
-    Args:
-        partition_loaders: The PartitionedDataSet dictionary of loaders.
-        indices_to_use: A set of global row indices to include.
-        params: Dictionary with 'X_column' and 'label' names.
-        batch_size: The number of samples per batch.
-
-    Yields:
-        A tuple of (X_batch, y_batch) ready for model training.
+    Infinite generator for training. Keeps deterministic order unless shuffled per epoch.
     """
-    global_index_offset = 0
-    
-    # This outer loop is required by Keras for multiple epochs
+    x_col, y_col = params["X_column"], params["label"]
+    spans = _partition_spans(partition_loaders)
+    base_order = np.array(ordered_indices, dtype=int)
+
     while True:
-        for partition_name, load_func in partition_loaders.items():
-            partition_df = load_func()
-            
-            # Preprocess the partition
-            processed_df = load_and_preprocess_fingerprints(partition_df.copy(), params)
-            if processed_df.empty:
-                global_index_offset += len(partition_df)
+        order = base_order.copy()
+        if shuffle_each_epoch:
+            rng = np.random.default_rng(42)
+            rng.shuffle(order)
+
+        for (name, start, end) in spans:
+            mask = (order >= start) & (order < end)
+            part_global = order[mask]
+            if part_global.size == 0:
                 continue
 
-            # Determine which global indices from this partition should be used
-            partition_global_indices = set(range(global_index_offset, global_index_offset + len(partition_df)))
-            relevant_indices_in_partition = partition_global_indices.intersection(indices_to_use)
-
-            if not relevant_indices_in_partition:
-                global_index_offset += len(partition_df)
+            local = np.sort(part_global - start)
+            df = partition_loaders[name]()
+            df = df.iloc[local]
+            df = load_and_preprocess_fingerprints(df, params)
+            if df.empty:
                 continue
 
-            # Convert global indices to local indices within the partition_df
-            local_indices_to_keep = [idx - global_index_offset for idx in relevant_indices_in_partition]
-            
-            # Filter the original (unprocessed) dataframe to align with processed data
-            target_df = partition_df.iloc[local_indices_to_keep]
+            X = np.stack(df[x_col].to_numpy()).astype(np.float32)
+            y = df[y_col].to_numpy().astype(np.float32)
+            X = X.reshape((X.shape[0], X.shape[1], 1))
 
-            # We must re-process the filtered data to ensure alignment, especially after dropping NaNs
-            final_batch_df = load_and_preprocess_fingerprints(target_df.copy(), params)
+            for i in range(0, len(df), batch_size):
+                yield X[i:i+batch_size], y[i:i+batch_size]
 
-            # Yield data in batches from this filtered partition
-            for i in range(0, len(final_batch_df), batch_size):
-                batch_df = final_batch_df.iloc[i:i + batch_size]
-                
-                X_list = list(batch_df[params['X_column']])
-                X_batch_array = np.array(X_list)
-                y_batch_array = np.array(batch_df[params['label']])
-                
-                # Reshape for 1D CNN
-                X_batch_reshaped = X_batch_array.reshape(
-                    (X_batch_array.shape[0], X_batch_array.shape[1], 1)
-                )
-                
-                yield (X_batch_reshaped, y_batch_array)
-            
-            global_index_offset += len(partition_df)
-        
-        # Reset for the next epoch
-        global_index_offset = 0
 
-# --- MODIFIED ORCHESTRATION FUNCTION ---
+def finite_eval_generator(
+    partition_loaders: Dict[str, Callable[[], pd.DataFrame]],
+    ordered_indices: List[int],
+    params: Dict[str, str],
+    batch_size: int,
+) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
+    """
+    Single-pass generator for validation/test with deterministic order.
+    """
+    x_col, y_col = params["X_column"], params["label"]
+    spans = _partition_spans(partition_loaders)
+    order = np.array(ordered_indices, dtype=int)
+
+    for (name, start, end) in spans:
+        mask = (order >= start) & (order < end)
+        part_global = order[mask]
+        if part_global.size == 0:
+            continue
+
+        local = np.sort(part_global - start)
+        df = partition_loaders[name]()
+        df = df.iloc[local]
+        df = load_and_preprocess_fingerprints(df, params)
+        if df.empty:
+            continue
+
+        X = np.stack(df[x_col].to_numpy()).astype(np.float32)
+        y = df[y_col].to_numpy().astype(np.float32)
+        X = X.reshape((X.shape[0], X.shape[1], 1))
+
+        for i in range(0, len(df), batch_size):
+            yield X[i:i+batch_size], y[i:i+batch_size]
+
+
+# --------------------------
+# Model
+# --------------------------
+
+def build_def_model_dynamic(hp: HyperParameters, input_shape: tuple) -> keras.Sequential:
+    # explicit Input with dtype float32 silences dtype ambiguity
+    model = keras.Sequential([
+        keras.Input(shape=input_shape, dtype="float32"),
+        layers.Conv1D(
+            filters=hp.Int('conv_1_filter', min_value=16, max_value=128, step=16),
+            kernel_size=hp.Choice('conv_1_kernel', values=[3, 5]),
+            activation='relu',
+            padding='valid'
+        ),
+        layers.MaxPool1D(hp.Int('pool_size', min_value=2, max_value=6)),
+        layers.Flatten(),
+        layers.Dense(
+            units=hp.Int('dense_1_units', min_value=32, max_value=128, step=16),
+            activation='relu',
+            kernel_initializer='he_uniform'
+        ),
+        layers.Dropout(0.5),
+        layers.Dense(1, activation='sigmoid'),
+    ])
+    model.compile(
+        optimizer=keras.optimizers.Adam(hp.Choice('learning_rate', values=[1e-2, 1e-3])),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
+    return model
+
+
+# --------------------------
+# Orchestration
+# --------------------------
 
 def train_model_on_partitions(
     partitioned_model_input: Dict[str, Callable[[], pd.DataFrame]],
     train_params: dict,
     split_params: dict,
     tune_params: dict,
-    batch_size: int = 128
-) -> tuple:
+    batch_size: int = 128,
+):
     """
-    Orchestrates the entire model pipeline using memory-efficient generators
-    for partitioned data.
+    Train + evaluate on partitioned data with correct splits and stable ordering.
+    Expects split_params: {X_column, label, val_size, test_size}
+            train_params: {epochs (int), batch_size (optional)}
     """
-    # 1. Get global train/test split indices
-    train_indices, val_indices, test_indices = create_train_val_test_indices(
+    batch_size = train_params.get("batch_size", batch_size)
+
+    # 1) Proper split on valid rows only (after keep/drop)
+    train_idx, val_idx, test_idx = create_train_val_test_indices(
         partitioned_model_input, split_params
     )
-    
-    # Convert to sets for efficient lookup in the generator
-    train_indices_set = set(train_indices)
-    val_indices_set = set(val_indices)
-    test_indices_set = set(test_indices)
 
-    # 2. Create data generators
-    train_generator = partitioned_data_generator(
-        partitioned_model_input, train_indices_set, split_params, batch_size
+    # 2) Generators
+    train_gen = infinite_train_generator(
+        partitioned_model_input, train_idx, split_params, batch_size, shuffle_each_epoch=True
     )
-    val_generator = partitioned_data_generator(
-        partitioned_model_input, val_indices_set, split_params, batch_size
-    )
-    # Use a non-shuffling generator for evaluation to ensure order
-    test_generator = partitioned_data_generator(
-        partitioned_model_input, test_indices_set, split_params, batch_size
+    val_gen = finite_eval_generator(
+        partitioned_model_input, val_idx, split_params, batch_size
     )
 
-    # 3. Calculate steps for Keras
-    steps_per_epoch = math.ceil(len(train_indices) / batch_size)
-    validation_steps = math.ceil(len(test_indices) / batch_size)
+    # 3) Steps
+    steps_per_epoch  = math.ceil(len(train_idx) / batch_size)
+    validation_steps = math.ceil(len(val_idx)   / batch_size)
 
-    # Note: KerasTuner with generators can be complex. For simplicity, we'll
-    # skip tuning here and train a default model. Full tuning would require
-    # a custom Tuner class or careful generator resets. Let's build and train.
-    # We get a single batch to determine the input shape.
-    sample_X, _ = next(train_generator)
+    # 4) Build model
+    sample_X, _ = next(train_gen)
     in_shape = sample_X.shape[1:]
-    
-    # 4. Build a model (using a simplified builder for this example)
-    # The `build_def_model` needs to be able to accept the input shape
-    hp = HyperParameters() # Dummy HP object
-    tuned_model = build_def_model_dynamic(hp, in_shape) # A modified build function
-    
-    # 5. Training the model with generators
-    history = tuned_model.fit(
-        train_generator,
-        epochs=200,
+    hp = HyperParameters()
+    model = build_def_model_dynamic(hp, in_shape)
+
+    # 5) Train
+    history = model.fit(
+        train_gen,
+        epochs=train_params.get("epochs", 200),
         steps_per_epoch=steps_per_epoch,
-        validation_data=val_generator,
+        validation_data=val_gen,
         validation_steps=validation_steps,
-        callbacks=[EarlyStopping(monitor="val_loss", patience=10)],
-        verbose=1
+        callbacks=[keras.callbacks.EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)],
+        verbose=1,
     )
 
-    # Helper function to get predictions and true labels from a generator
-    def get_preds_and_labels(generator, steps, indices):
-        y_true_list = []
-        y_pred_list = []
-        
-        # Make predictions
-        predictions = tuned_model.predict(generator, steps=steps, verbose=1)
-        y_pred_list = (predictions > 0.5).astype(int).flatten()
-
-        # Re-run the generator to get the true labels in the correct order
-        # This is crucial for correct evaluation.
-        label_generator = partitioned_data_generator(
-            partitioned_model_input, set(indices), split_params, batch_size
-        )
-        for i, (_, y_batch) in enumerate(label_generator):
-            if i >= steps:
+    # 6) Evaluation (materialize once for perfect alignment)
+    def _materialize(gen: Iterator[Tuple[np.ndarray, np.ndarray]], steps: int):
+        Xb, yb = [], []
+        for _ in range(steps):
+            try:
+                X, y = next(gen)
+            except StopIteration:
                 break
-            y_true_list.extend(y_batch)
-        
-        # Trim y_true to match the length of predictions
-        return np.array(y_true_list[:len(y_pred_list)]), y_pred_list
+            Xb.append(X); yb.append(y)
+        Xall = np.concatenate(Xb, axis=0) if Xb else np.empty((0,) + in_shape, dtype=np.float32)
+        yall = np.concatenate(yb, axis=0) if yb else np.empty((0,), dtype=np.float32)
+        return Xall, yall
 
-    # 6. Evaluation on validation set
-    print("Model evaluation on validation set...")
-    val_steps = math.ceil(len(val_indices) / batch_size)
-    y_val_true, y_val_pred = get_preds_and_labels(val_generator, val_steps, val_indices)
-    
-    val_predictions = pd.DataFrame({"y_true": y_val_true, "y_pred": y_val_pred})
-    val_class_rep = metrics.classification_report(y_val_true, y_val_pred)
+    # Val
+    val_gen_eval = finite_eval_generator(
+        partitioned_model_input, val_idx, split_params, batch_size
+    )
+    Xv, yv = _materialize(val_gen_eval, validation_steps)
+    yv_pred = (model.predict(Xv, verbose=0) > 0.5).astype(int).ravel()
+    n = min(len(yv), len(yv_pred))
+    val_predictions = pd.DataFrame({"y_true": yv[:n], "y_pred": yv_pred[:n]})
+    val_report = metrics.classification_report(yv[:n], yv_pred[:n])
 
-    # 7. Evaluation on test set
-    print("Model evaluation on test set...")
-    test_steps = math.ceil(len(test_indices) / batch_size)
-    y_test_true, y_test_pred = get_preds_and_labels(test_generator, test_steps, test_indices)
-    
-    train_predictions = pd.DataFrame({"y_true": y_test_true, "y_pred": y_test_pred})
-    train_class_rep = metrics.classification_report(y_test_true, y_test_pred)
+    # Test
+    test_steps = math.ceil(len(test_idx) / batch_size)
+    test_gen_eval = finite_eval_generator(
+        partitioned_model_input, test_idx, split_params, batch_size
+    )
+    Xt, yt = _materialize(test_gen_eval, test_steps)
+    yt_pred = (model.predict(Xt, verbose=0) > 0.5).astype(int).ravel()
+    n2 = min(len(yt), len(yt_pred))
+    test_predictions = pd.DataFrame({"y_true": yt[:n2], "y_pred": yt_pred[:n2]})
+    test_report = metrics.classification_report(yt[:n2], yt_pred[:n2])
 
-    # 8. Return all outputs (as before)
     return (
-        tuned_model,
+        model,
         history.history,
-        train_predictions,
-        train_class_rep,
+        test_predictions,
+        test_report,
         val_predictions,
-        val_class_rep,
+        val_report,
     )
-
-def build_def_model_dynamic(hp: HyperParameters, input_shape: tuple) -> Sequential:
-    """Modified build_model to accept a dynamic input_shape."""
-    model = keras.Sequential()
-    # Add the input layer separately or in the first layer
-    model.add(
-        layers.Conv1D(
-            filters=hp.Int('conv_1_filter', min_value=16, max_value=128, step=16),
-            kernel_size=hp.Choice('conv_1_kernel', values=[3,5]),
-            activation='relu',
-            input_shape=input_shape, # KEY CHANGE
-            padding='valid'
-        )
-    )
-    # ... The rest of your build_def_model function is the same ...
-    model.add(layers.MaxPool1D(hp.Int('pool_size', min_value=2, max_value=6)))
-    if hp.Boolean("dropout"):
-        model.add(layers.Dropout(rate=0.25))
-    model.add(layers.Flatten())
-    model.add(layers.Dense(units=hp.Int('dense_1_units', min_value=32, max_value=128, step=16), activation='relu', kernel_initializer='he_uniform'))
-    model.add(layers.Dropout(0.5))
-    model.add(layers.Dense(1, activation='sigmoid'))
-    model.compile(optimizer=keras.optimizers.Adam(hp.Choice('learning_rate', values=[1e-2, 1e-3])), loss='binary_crossentropy', metrics=['accuracy'])
-    return model
-
-def get_predictions(model: Sequential,
-                    reshaped_X_test: np.ndarray,
-                    y_true: pd.Series
-                    ) -> Tuple[pd.Series, str]:
-    """Generates predictions from a trained model and computes its classification report.
-
-    This function predicts class labels for given input data using a pre-trained
-    Keras Sequential model and then provides a detailed classification report
-    comparing the predicted labels to the true labels. This function is specifically
-    designed for binary classification where the model's output layer uses a sigmoid
-    activation (single unit) and outputs probabilities, which are then converted
-    to binary class labels (0 or 1).
-
-    Args:
-        model: The trained Keras Sequential model.
-        reshaped_X_data: The input feature data (e.g., reshaped X_test or reshaped_val_X_test)
-                         as a NumPy array, ready for model prediction.
-        y_true: The true labels corresponding to `reshaped_X_data`, as a Pandas Series.
-
-    Returns:
-        A tuple containing:
-        - y_pred_series (pd.Series): Predicted binary labels (0 or 1) as a Pandas Series.
-        - class_rep (str): A string representing the sklearn classification report,
-                           including precision, recall, f1-score, and support for each class.
-    """
-    y_pred = model.predict(reshaped_X_test)
-    y_pred_list = (y_pred > 0.5).astype(int).flatten().tolist()
-    class_rep = metrics.classification_report(y_true,y_pred_list)
-    print(class_rep)
-    return pd.Series(y_pred_list), class_rep
-
-def evaluate_on_single_df(model: Sequential, df: pd.DataFrame, params: dict) -> Tuple[pd.Series, str]:
-    """
-    Helper to evaluate the model on a single, in-memory DataFrame (e.g., a validation set).
-
-    This function preprocesses the DataFrame, reshapes the features for the CNN,
-    and then uses the `get_predictions` helper to generate predictions and a
-    classification report.
-
-    Args:
-        model: The trained Keras Sequential model.
-        df: The validation DataFrame to evaluate.
-        params: A dictionary containing 'X_column' and 'label' keys.
-
-    Returns:
-        A tuple containing:
-        - val_predictions (pd.Series): The predicted labels for the DataFrame.
-        - val_class_rep (str): The classification report string.
-    """
-    print("Preprocessing validation DataFrame...")
-    processed_df = load_and_preprocess_fingerprints(df.copy(), params)
-
-    # Handle case where the validation set is empty after processing
-    if processed_df.empty:
-        print("Warning: Validation DataFrame is empty after preprocessing. Skipping evaluation.")
-        return pd.Series(dtype=int), "No validation data to evaluate."
-
-    print("Preparing validation data for the model...")
-    X_array = np.array(list(processed_df[params['X_column']]))
-    y_true = processed_df[params['label']]
-
-    # Reshape for 1D CNN model: (samples, features, 1)
-    reshaped_X = X_array.reshape((X_array.shape[0], X_array.shape[1], 1))
-
-    print("Generating predictions on validation data...")
-    # This was the missing part: calling your get_predictions function
-    val_predictions, val_class_rep = get_predictions(model, reshaped_X, y_true)
-
-    return val_predictions, val_class_rep
