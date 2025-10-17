@@ -1,7 +1,7 @@
 import math
 import numpy as np
 import pandas as pd
-from typing import Dict, Callable, Iterator, Tuple, List
+from typing import Dict, Callable, Iterator, Optional, Tuple, List
 
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
@@ -117,18 +117,22 @@ def infinite_train_generator(
     params: Dict[str, str],
     batch_size: int,
     shuffle_each_epoch: bool = False,
+    seed: Optional[int] = None,
 ) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
     """
-    Infinite generator for training. Keeps deterministic order unless shuffled per epoch.
+    Infinite generator for training. Deterministic unless shuffling is enabled.
+    If shuffle_each_epoch=True and seed is None, uses a fresh RNG each epoch.
     """
     x_col, y_col = params["X_column"], params["label"]
     spans = _partition_spans(partition_loaders)
     base_order = np.array(ordered_indices, dtype=int)
 
+    # Create RNG once (don’t re-seed inside the loop)
+    rng = np.random.default_rng(seed) if shuffle_each_epoch else None
+
     while True:
         order = base_order.copy()
-        if shuffle_each_epoch:
-            rng = np.random.default_rng(42)
+        if rng is not None:
             rng.shuffle(order)
 
         for (name, start, end) in spans:
@@ -152,38 +156,40 @@ def infinite_train_generator(
                 yield X[i:i+batch_size], y[i:i+batch_size]
 
 
-def finite_eval_generator(
+def repeating_eval_generator(
     partition_loaders: Dict[str, Callable[[], pd.DataFrame]],
     ordered_indices: List[int],
     params: Dict[str, str],
     batch_size: int,
 ) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
     """
-    Single-pass generator for validation/test with deterministic order.
+    Infinite (repeating) generator for validation/test. Deterministic order each cycle.
+    Safe to pass to Keras with `validation_steps`.
     """
     x_col, y_col = params["X_column"], params["label"]
     spans = _partition_spans(partition_loaders)
     order = np.array(ordered_indices, dtype=int)
 
-    for (name, start, end) in spans:
-        mask = (order >= start) & (order < end)
-        part_global = order[mask]
-        if part_global.size == 0:
-            continue
+    while True:
+        for (name, start, end) in spans:
+            mask = (order >= start) & (order < end)
+            part_global = order[mask]
+            if part_global.size == 0:
+                continue
 
-        local = np.sort(part_global - start)
-        df = partition_loaders[name]()
-        df = df.iloc[local]
-        df = load_and_preprocess_fingerprints(df, params)
-        if df.empty:
-            continue
+            local = np.sort(part_global - start)
+            df = partition_loaders[name]()
+            df = df.iloc[local]
+            df = load_and_preprocess_fingerprints(df, params)
+            if df.empty:
+                continue
 
-        X = np.stack(df[x_col].to_numpy()).astype(np.float32)
-        y = df[y_col].to_numpy().astype(np.float32)
-        X = X.reshape((X.shape[0], X.shape[1], 1))
+            X = np.stack(df[x_col].to_numpy()).astype(np.float32)
+            y = df[y_col].to_numpy().astype(np.float32)
+            X = X.reshape((X.shape[0], X.shape[1], 1))
 
-        for i in range(0, len(df), batch_size):
-            yield X[i:i+batch_size], y[i:i+batch_size]
+            for i in range(0, len(df), batch_size):
+                yield X[i:i+batch_size], y[i:i+batch_size]
 
 
 # --------------------------
@@ -243,10 +249,10 @@ def train_model_on_partitions(
 
     # 2) Generators
     train_gen = infinite_train_generator(
-        partitioned_model_input, train_idx, split_params, batch_size, shuffle_each_epoch=True
+    partitioned_model_input, train_idx, split_params, batch_size, shuffle_each_epoch=True
     )
-    val_gen = finite_eval_generator(
-        partitioned_model_input, val_idx, split_params, batch_size
+    val_gen = repeating_eval_generator(
+    partitioned_model_input, val_idx, split_params, batch_size
     )
 
     # 3) Steps
@@ -263,9 +269,9 @@ def train_model_on_partitions(
     history = model.fit(
         train_gen,
         epochs=train_params.get("epochs", 200),
-        steps_per_epoch=steps_per_epoch,
+        steps_per_epoch=math.ceil(len(train_idx) / batch_size),
         validation_data=val_gen,
-        validation_steps=validation_steps,
+        validation_steps=math.ceil(len(val_idx) / batch_size),
         callbacks=[keras.callbacks.EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)],
         verbose=1,
     )
@@ -284,7 +290,7 @@ def train_model_on_partitions(
         return Xall, yall
 
     # Val
-    val_gen_eval = finite_eval_generator(
+    val_gen_eval = repeating_eval_generator(
         partitioned_model_input, val_idx, split_params, batch_size
     )
     Xv, yv = _materialize(val_gen_eval, validation_steps)
@@ -295,7 +301,7 @@ def train_model_on_partitions(
 
     # Test
     test_steps = math.ceil(len(test_idx) / batch_size)
-    test_gen_eval = finite_eval_generator(
+    test_gen_eval = repeating_eval_generator(
         partitioned_model_input, test_idx, split_params, batch_size
     )
     Xt, yt = _materialize(test_gen_eval, test_steps)
