@@ -4,10 +4,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from rdkit import Chem
-from rdkit.Chem import AllChem, PandasTools as pt
+from rdkit.Chem import AllChem, MACCSkeys, rdMolDescriptors, PandasTools as pt
 from typing import Optional, Callable, Dict, Set, Any
 
 # --- Core functions ---
+# Using featurize_molecule to generate combined fingerprints, not compute_morgan_fp alone
 def compute_morgan_fp(mol: Chem.Mol, depth: int = 2, nBits: int = 2048) -> Optional[np.ndarray]:
     """Computes the Morgan fingerprint for a single RDKit molecule.
 
@@ -33,6 +34,54 @@ def compute_morgan_fp(mol: Chem.Mol, depth: int = 2, nBits: int = 2048) -> Optio
         return np.array(mor_fp, dtype=np.bool_) # IMPORTANT MEMORY OPTIMIZATION
     except Exception as e:
         return None
+
+def featurize_molecule(mol,
+                                morgan_bits=2048,
+                                morgan_radius=2,
+                                morgan_feat_bits=1024,
+                                ap_bits=1024,
+                                tt_bits=1024):
+    """
+    Returns concatenated numpy array of:
+      - Morgan (ECFP)
+      - Feature-based Morgan (FCFP)
+      - MACCS keys
+      - Hashed Atom Pair fingerprint
+      - Hashed Topological Torsion fingerprint
+      - TPSA (1 value)
+    """
+
+    if mol is None:
+        total_len = morgan_bits + morgan_feat_bits + 166 + ap_bits + tt_bits + 1
+        return np.zeros(total_len, dtype=float)
+
+    # Morgan ECFP
+    morgan_fp = AllChem.GetMorganFingerprintAsBitVect(mol, morgan_radius, nBits=morgan_bits, useFeatures=False)
+    morgan_arr = np.array(morgan_fp, dtype=float)
+
+    # Feature-based Morgan (FCFP-like)
+    morgan_feat_fp = AllChem.GetMorganFingerprintAsBitVect(mol, morgan_radius, nBits=morgan_feat_bits, useFeatures=True)
+    morgan_feat_arr = np.array(morgan_feat_fp, dtype=float)
+
+    # MACCS
+    maccs_fp = MACCSkeys.GenMACCSKeys(mol)
+    maccs_arr = np.array(maccs_fp, dtype=float)
+
+    # Hashed Atom Pair
+    ap_fp = rdMolDescriptors.GetHashedAtomPairFingerprintAsBitVect(mol, nBits=ap_bits)
+    ap_arr = np.array(ap_fp, dtype=float)
+
+    # Hashed Topological Torsion
+    tt_fp = rdMolDescriptors.GetHashedTopologicalTorsionFingerprintAsBitVect(mol, nBits=tt_bits)
+    tt_arr = np.array(tt_fp, dtype=float)
+
+    # TPSA
+    tpsa = rdMolDescriptors.CalcTPSA(mol)
+    tpsa_arr = np.array([tpsa], dtype=float)
+
+    # Concatenate everything
+    return np.concatenate([morgan_arr, morgan_feat_arr, maccs_arr, ap_arr, tt_arr, tpsa_arr])
+
 
 """ def is_lipinski(x: pd.DataFrame) -> pd.DataFrame:
     Applies Lipinski's Rule of Five to a DataFrame of molecular properties.
@@ -80,7 +129,7 @@ def add_fingerprints(df: pd.DataFrame) -> pd.DataFrame:
     calculated_column = 'Morgan2FP'
 
     # Compute Morgan fingerprints
-    df[calculated_column] = df[base_column].map(compute_morgan_fp)
+    df[calculated_column] = df[base_column].map(featurize_molecule) # compute_morgan_fp)
     
     # Drop the intermediate RDKit_Molecule column
     final_df = df.drop(columns=[base_column])

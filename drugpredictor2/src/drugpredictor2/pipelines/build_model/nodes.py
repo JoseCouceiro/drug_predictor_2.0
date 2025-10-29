@@ -195,8 +195,44 @@ def repeating_eval_generator(
 # --------------------------
 # Model
 # --------------------------
+# Dropping CNN model for simplicity
+from keras import layers, models, optimizers, regularizers
 
-def build_def_model_dynamic(hp: HyperParameters, input_shape: tuple) -> keras.Sequential:
+def build_def_model_dynamic_Dense(hp, input_shape):
+    model = models.Sequential([
+        layers.Input(shape=input_shape, dtype="float32"),
+        layers.Flatten(),
+        layers.Dense(
+            hp.Int('dense_1_units', 256, 512, step=64),
+            activation=None,
+            kernel_initializer='he_uniform'
+        ),
+        layers.BatchNormalization(),
+        layers.LeakyReLU(alpha=0.1),
+        layers.Dropout(hp.Float('dropout_1', 0.2, 0.4, step=0.1)),
+
+        layers.Dense(
+            hp.Int('dense_2_units', 128, 256, step=64),
+            activation='leaky_relu',
+            kernel_initializer='he_uniform',
+            kernel_regularizer=regularizers.l2(1e-5)
+        ),
+        layers.Dropout(0.5),
+
+        layers.Dense(1, activation='sigmoid')
+    ])
+    
+    model.compile(
+        optimizer=optimizers.Adam(
+            learning_rate=hp.Choice('learning_rate', [1e-3, 5e-4, 1e-4])
+        ),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
+    
+    return model
+
+def build_def_model_dynamic_v0(hp: HyperParameters, input_shape: tuple) -> keras.Sequential:
     # explicit Input with dtype float32 silences dtype ambiguity
     model = keras.Sequential([
         keras.Input(shape=input_shape, dtype="float32"),
@@ -213,7 +249,7 @@ def build_def_model_dynamic(hp: HyperParameters, input_shape: tuple) -> keras.Se
             activation='relu',
             kernel_initializer='he_uniform'
         ),
-        layers.Dropout(0.5),
+        layers.Dropout(hp.Float('dropout_dense', 0.6, 0.8, step=0.05)),
         layers.Dense(1, activation='sigmoid'),
     ])
     model.compile(
@@ -221,6 +257,49 @@ def build_def_model_dynamic(hp: HyperParameters, input_shape: tuple) -> keras.Se
         loss='binary_crossentropy',
         metrics=['accuracy']
     )
+    return model
+
+# This is the model used in the final experiments
+def build_def_model_dynamic(hp: HyperParameters, input_shape: tuple) -> keras.Sequential:
+    model = models.Sequential([
+        layers.Input(shape=input_shape, dtype="float32"),
+
+        # Single Conv1D layer
+        layers.Conv1D(
+            filters=hp.Int('conv_filters', 32, 128, step=16),
+            kernel_size=hp.Choice('conv_kernel', [3,5]),
+            activation='relu',
+            padding='valid'
+        ),
+
+        layers.Flatten(),
+
+        # Dense layers
+        layers.Dense(
+            units=hp.Int('dense_1_units', 256, 512, step=64),
+            activation='relu',
+            kernel_initializer='he_uniform'
+        ),
+        layers.Dropout(hp.Float('dropout_1', 0.3, 0.5, step=0.05)),
+
+        layers.Dense(
+            units=hp.Int('dense_2_units', 128, 256, step=32),
+            activation='relu',
+            kernel_initializer='he_uniform'
+        ),
+        layers.Dropout(hp.Float('dropout_2', 0.3, 0.5, step=0.05)),
+
+        layers.Dense(1, activation='sigmoid')
+    ])
+
+    model.compile(
+        optimizer=optimizers.Adam(
+            learning_rate=hp.Choice('learning_rate', [1e-3, 5e-4])
+        ),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
+
     return model
 
 

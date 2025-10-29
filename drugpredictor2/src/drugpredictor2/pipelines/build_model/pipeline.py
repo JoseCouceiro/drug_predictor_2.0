@@ -11,7 +11,7 @@ def create_pipeline(**kwargs) -> Pipeline:
             node(
                 func=train_model_on_partitions,
                 inputs=[
-                    "featurized_data",
+                    "maccs_featurized_data", # featurized_data if using morgan only
                     "params:train_params",
                     "params:split_params",
                     "params:tune_params" ,

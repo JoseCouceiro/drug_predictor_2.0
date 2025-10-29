@@ -6,7 +6,7 @@ def create_pipeline(**kwargs) -> Pipeline:
     return pipeline([
         node(
             func=get_existing_fnames,
-            inputs="params:featurized_data_path", # Load the path from parameters
+            inputs="params:maccs_featurized_data_path", # featurized_data if using morgan only
             outputs="existing_partitions_set",
             name="get_existing_partitions_node",
         ),
@@ -14,7 +14,7 @@ def create_pipeline(**kwargs) -> Pipeline:
             func=process_new_partitions,
             # Takes all raw files AND the set of existing files as input
             inputs=["raw_csv_files", "existing_partitions_set"],
-            outputs="featurized_data",
+            outputs="maccs_featurized_data", # featurized_data if using morgan only
             name="process_new_partitions_node",
         )
     ])

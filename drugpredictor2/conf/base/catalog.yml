@@ -12,6 +12,13 @@ featurized_data:
     type: pandas.ParquetDataSet
     filepath: dummy.parquet
 
+maccs_featurized_data:
+  type: PartitionedDataSet
+  path: data/05_model_input/maccs_featurized_data
+  dataset:
+    type: pandas.ParquetDataSet
+    filepath: dummy.parquet
+
 # Trained Keras model
 trained_model:
   type: pickle.PickleDataSet

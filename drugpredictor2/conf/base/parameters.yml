@@ -1,4 +1,5 @@
 featurized_data_path: data/05_model_input/featurized_data
+maccs_featurized_data_path: data/05_model_input/maccs_featurized_data
 
 fingerprints_params:
   X_column: Morgan2FP
