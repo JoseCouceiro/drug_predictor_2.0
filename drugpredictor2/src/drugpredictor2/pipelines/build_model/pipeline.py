@@ -17,12 +17,12 @@ def create_pipeline(**kwargs) -> Pipeline:
                     "params:tune_params" ,
                 ],
                 outputs=[
-                    "trained_model",
-                    "training_history",
-                    "train_predictions",
-                    "train_report",
-                    "val_predictions",
-                    "val_report"
+                    "lipinski_model",
+                    "lipinski_training_history",
+                    "lipinski_train_predictions",
+                    "lipinski_train_report",
+                    "lipinski_val_predictions",
+                    "lipinski_val_report"
                 ],
                 name="train_model_on_partitions_node"
             )

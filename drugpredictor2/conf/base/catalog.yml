@@ -20,36 +20,34 @@ maccs_featurized_data:
     filepath: dummy.parquet
 
 # Trained Keras model
-trained_model:
+lipinski_model:
   type: pickle.PickleDataSet
-  filepath: data/06_models/trained_model.pkl
+  filepath: data/06_models/lipinski_model.pkl
   backend: pickle
 
 # Training history (includes training & validation metrics per epoch)
-training_history:
+lipinski_training_history:
   type: json.JSONDataSet
-  filepath: data/08_reporting/training_history.json
+  filepath: data/08_reporting/lipinski_training_history.json
 
 # Predictions on the training/test set
-train_predictions:
+lipinski_train_predictions:
   type: pandas.CSVDataSet
-  filepath: data/07_model_output/train_predictions.csv
+  filepath: data/07_model_output/lipinski_train_predictions.csv
 
 # Classification report on the training/test set
-train_report:
+lipinski_train_report:
   type: text.TextDataSet
-  filepath: data/08_reporting/train_report.txt
+  filepath: data/08_reporting/lipinski_train_report.txt
 
 # Predictions on the validation set
-val_predictions:
+lipinski_val_predictions:
   type: pandas.CSVDataSet
-  filepath: data/07_model_output/val_predictions.csv
+  filepath: data/07_model_output/lipinski_val_predictions.csv
 
 # Classification report on the validation set
-val_report:
+lipinski_val_report:
   type: text.TextDataSet
-  filepath: data/08_reporting/val_report.txt
-
-
+  filepath: data/08_reporting/lipinski_val_report.txt
 
 
