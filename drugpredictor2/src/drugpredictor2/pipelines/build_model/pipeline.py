@@ -13,8 +13,7 @@ def create_pipeline(**kwargs) -> Pipeline:
                 inputs=[
                     "featurized_data",
                     "params:train_params",
-                    "params:split_params",
-                    "params:tune_params" ,
+                    "params:split_params"
                 ],
                 outputs=[
                     "lipinski_model",

@@ -7,7 +7,7 @@ from sklearn import metrics
 from sklearn.model_selection import train_test_split
 
 from tensorflow import keras
-from tensorflow.keras import layers
+from keras import layers, models, optimizers, regularizers
 from keras_tuner import HyperParameters
 
 
@@ -195,8 +195,6 @@ def repeating_eval_generator(
 # --------------------------
 # Model
 # --------------------------
-# Dropping CNN model for simplicity
-from keras import layers, models, optimizers, regularizers
 
 def build_def_model_dynamic_Dense(hp, input_shape):
     model = models.Sequential([
@@ -226,34 +224,6 @@ def build_def_model_dynamic_Dense(hp, input_shape):
         optimizer=optimizers.Adam(
             learning_rate=hp.Choice('learning_rate', [1e-3, 5e-4, 1e-4])
         ),
-        loss='binary_crossentropy',
-        metrics=['accuracy']
-    )
-    
-    return model
-
-def build_def_model_dynamic_v0(hp: HyperParameters, input_shape: tuple) -> keras.Sequential:
-    # explicit Input with dtype float32 silences dtype ambiguity
-    model = keras.Sequential([
-        keras.Input(shape=input_shape, dtype="float32"),
-        layers.Conv1D(
-            filters=hp.Int('conv_1_filter', min_value=16, max_value=128, step=16),
-            kernel_size=hp.Choice('conv_1_kernel', values=[3, 5]),
-            activation='relu',
-            padding='valid'
-        ),
-        layers.MaxPool1D(hp.Int('pool_size', min_value=2, max_value=6)),
-        layers.Flatten(),
-        layers.Dense(
-            units=hp.Int('dense_1_units', min_value=32, max_value=128, step=16),
-            activation='relu',
-            kernel_initializer='he_uniform'
-        ),
-        layers.Dropout(hp.Float('dropout_dense', 0.6, 0.8, step=0.05)),
-        layers.Dense(1, activation='sigmoid'),
-    ])
-    model.compile(
-        optimizer=keras.optimizers.Adam(hp.Choice('learning_rate', values=[1e-2, 1e-3])),
         loss='binary_crossentropy',
         metrics=['accuracy']
     )
@@ -311,15 +281,13 @@ def train_model_on_partitions(
     partitioned_model_input: Dict[str, Callable[[], pd.DataFrame]],
     train_params: dict,
     split_params: dict,
-    tune_params: dict,
-    batch_size: int = 128,
 ):
     """
     Train + evaluate on partitioned data with correct splits and stable ordering.
     Expects split_params: {X_column, label, val_size, test_size}
             train_params: {epochs (int), batch_size (optional)}
     """
-    batch_size = train_params.get("batch_size", batch_size)
+    batch_size = train_params['batch_size']
 
     # 1) Proper split on valid rows only (after keep/drop)
     train_idx, val_idx, test_idx = create_train_val_test_indices(
@@ -347,7 +315,7 @@ def train_model_on_partitions(
     # 5) Train
     history = model.fit(
         train_gen,
-        epochs=train_params.get("epochs", 200),
+        epochs=train_params['epochs'],
         steps_per_epoch=math.ceil(len(train_idx) / batch_size),
         validation_data=val_gen,
         validation_steps=math.ceil(len(val_idx) / batch_size),

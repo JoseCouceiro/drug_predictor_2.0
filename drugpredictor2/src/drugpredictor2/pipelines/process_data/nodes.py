@@ -8,32 +8,6 @@ from rdkit.Chem import AllChem, MACCSkeys, rdMolDescriptors, PandasTools as pt
 from typing import Optional, Callable, Dict, Set, Any
 
 # --- Core functions ---
-# Using featurize_molecule to generate combined fingerprints, not compute_morgan_fp alone
-def compute_morgan_fp(mol: Chem.Mol, depth: int = 2, nBits: int = 2048) -> Optional[np.ndarray]:
-    """Computes the Morgan fingerprint for a single RDKit molecule.
-
-    This function generates a Morgan fingerprint (equivalent to ECFP/FCFP)
-    as a bit vector for the given RDKit molecule. It handles potential
-    issues during fingerprint generation by returning None upon failure.
-
-    Args:
-        mol: The RDKit molecule object.
-        depth: The radius of the fingerprint, defining the maximum distance
-               from the central atom to consider for atom environments.
-               (Equivalent to morgan_radius or ECFP/FCFP diameter/2).
-        nBits: The desired length of the bit vector, which determines the
-               number of possible features.
-
-    Returns:
-        A NumPy array of booleans (for memory saving) representing the Morgan fingerprint as a bit vector
-        (e.g., array([0, 1, 0, ..., 1])). Returns None if the fingerprint
-        computation fails (e.g., for an invalid molecule).
-    """
-    try:
-        mor_fp = AllChem.GetMorganFingerprintAsBitVect(mol, depth, nBits)
-        return np.array(mor_fp, dtype=np.bool_) # IMPORTANT MEMORY OPTIMIZATION
-    except Exception as e:
-        return None
 
 def featurize_molecule(mol,
                                 morgan_bits=2048,
@@ -82,31 +56,6 @@ def featurize_molecule(mol,
     # Concatenate everything
     return np.concatenate([morgan_arr, morgan_feat_arr, maccs_arr, ap_arr, tt_arr, tpsa_arr])
 
-
-""" def is_lipinski(x: pd.DataFrame) -> pd.DataFrame:
-    Applies Lipinski's Rule of Five to a DataFrame of molecular properties.
-
-    Calculates whether a molecule adheres to at least three of the four main
-    Lipinski rules (MW < 500, LogP <= 5, H-Bond Donors <= 5,
-    H-Bond Acceptors <= 10). Adds a 'RuleFive' column where 1 indicates
-    compliance (passes >= 3 rules) and 0 indicates failure.
-
-    Args:
-        x: DataFrame containing molecular properties, including 'Molecular Weight',
-           'LogP', 'H-Bond Donors', and 'H-Bond Acceptors'.
-
-    Returns:
-        The input DataFrame with an added 'RuleFive' integer column.
-   
-    # Lipinski rules
-    hdonor = x['H-Bond Donors'] <= 5
-    haccept = x['H-Bond Acceptors'] <= 10
-    mw = x['Molecular Weight'] < 500
-    clogP = x['LogP'] <= 5
-    # Apply rules to dataframe
-    x['RuleFive'] = np.where(((hdonor & haccept & mw) | (hdonor & haccept & clogP) | (hdonor & mw & clogP) | (haccept & mw & clogP)), 1, 0)
-    return x
- """
 def add_RDKit_mol(df: pd.DataFrame) -> pd.DataFrame:
     base_column = 'SMILES'
     calculated_column = 'RDKit_Molecule'
@@ -126,10 +75,10 @@ def add_RDKit_mol(df: pd.DataFrame) -> pd.DataFrame:
 
 def add_fingerprints(df: pd.DataFrame) -> pd.DataFrame:
     base_column = 'RDKit_Molecule'
-    calculated_column = 'Morgan2FP'
+    calculated_column = 'FP'
 
-    # Compute Morgan fingerprints
-    df[calculated_column] = df[base_column].map(featurize_molecule) # compute_morgan_fp)
+    # Compute fingerprints
+    df[calculated_column] = df[base_column].map(featurize_molecule)
     
     # Drop the intermediate RDKit_Molecule column
     final_df = df.drop(columns=[base_column])
