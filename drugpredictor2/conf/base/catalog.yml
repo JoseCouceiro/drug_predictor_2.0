@@ -12,6 +12,10 @@ featurized_data:
     type: pandas.ParquetDataSet
     filepath: dummy.parquet
 
+# ================================
+# Lipinski model outputs
+# ================================
+
 # Trained Keras model
 lipinski_model:
   type: pickle.PickleDataSet
@@ -43,4 +47,78 @@ lipinski_val_report:
   type: text.TextDataSet
   filepath: data/08_reporting/lipinski_val_report.txt
 
+# ================================
+# Multitask model outputs
+# ================================
 
+# Trained multitask model
+multitask_model:
+  type: pickle.PickleDataSet
+  filepath: data/06_models/multitask_model.pkl
+  backend: pickle
+
+# Training history (JSON)
+multitask_training_history:
+  type: json.JSONDataSet
+  filepath: data/08_reporting/multitask_training_history.json
+
+# Training set predictions
+multitask_train_predictions:
+  type: pandas.CSVDataSet
+  filepath: data/07_model_output/multitask_train_predictions.csv
+
+# Validation set predictions
+multitask_val_predictions:
+  type: pandas.CSVDataSet
+  filepath: data/07_model_output/multitask_val_predictions.csv
+
+# Classification reports
+multitask_train_drug_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/multitask_train_drug_report.txt
+
+multitask_train_atc_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/multitask_train_atc_report.txt
+
+multitask_val_drug_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/multitask_val_drug_report.txt
+
+multitask_val_atc_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/multitask_val_atc_report.txt
+
+# ======================================
+# Raw drug dataset
+# ======================================
+drug_raw:
+  type: pandas.CSVDataSet
+  filepath: data/01_raw/drugs_dataset/all_drugs_dataset.csv
+
+# ======================================
+# Processed outputs
+# ======================================
+
+# Features (Morgan + MACCS + TPSA)
+drug_X:
+  type: pickle.PickleDataSet
+  filepath: data/05_model_input/drug_X.pkl
+  backend: pickle
+
+# ATC categorical labels (one-hot encoded)
+drug_y_atc:
+  type: pickle.PickleDataSet
+  filepath: data/05_model_input/drug_y_atc.pkl
+  backend: pickle
+
+# Binary drug label
+drug_y_drug:
+  type: pickle.PickleDataSet
+  filepath: data/05_model_input/drug_y_drug.pkl
+  backend: pickle
+
+# Label mapping for reference
+atc_mapping:
+  type: pandas.CSVDataSet
+  filepath: data/08_reporting/atc_mapping.csv

@@ -9,3 +9,12 @@ split_params:
   X_column: 'FP'
   val_size: 0.1
   test_size: 0.1
+
+n_ATC_classes: 15
+
+# Fingerprint parameters
+fingerprint_radius: 2
+fingerprint_n_bits: 2048
+
+# Number of ATC classes (for model)
+n_atc_classes: 15
