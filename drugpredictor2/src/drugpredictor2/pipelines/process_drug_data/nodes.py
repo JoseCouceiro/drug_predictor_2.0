@@ -18,12 +18,14 @@ def mol_from_smiles(smiles: str):
         return None
 
 
-def compute_fingerprints(mol,
-                                morgan_bits=2048,
-                                morgan_radius=2,
-                                morgan_feat_bits=1024,
-                                ap_bits=1024,
-                                tt_bits=1024):
+def compute_fingerprints(smiles: str,
+                        morgan_bits=2048,
+                        maccs_bits=167,
+                        scalar_bits=1,
+                        morgan_radius=2,
+                        morgan_feat_bits=1024,
+                        ap_bits=1024,
+                        tt_bits=1024):
     """
     Returns concatenated numpy array of:
       - Morgan (ECFP)
@@ -33,38 +35,46 @@ def compute_fingerprints(mol,
       - Hashed Topological Torsion fingerprint
       - TPSA (1 value)
     """
+    total_len = morgan_bits + morgan_feat_bits + maccs_bits + ap_bits + tt_bits + scalar_bits
+    out = np.zeros(total_len, dtype=float)
 
-    if mol is None:
-        total_len = morgan_bits + morgan_feat_bits + 166 + ap_bits + tt_bits + 1
-        return np.zeros(total_len, dtype=float)
+    if not isinstance(smiles, str):
+        return out
+    
+    try:
+        mol = mol_from_smiles(smiles)
+        if mol is None:
+            return out
 
-    # Morgan ECFP
-    morgan_fp = AllChem.GetMorganFingerprintAsBitVect(mol, morgan_radius, nBits=morgan_bits, useFeatures=False)
-    morgan_arr = np.array(morgan_fp, dtype=float)
+        # Morgan ECFP
+        morgan_fp = AllChem.GetMorganFingerprintAsBitVect(mol, morgan_radius, nBits=morgan_bits, useFeatures=False)
+        morgan_arr = np.array(morgan_fp, dtype=float)
 
-    # Feature-based Morgan (FCFP-like)
-    morgan_feat_fp = AllChem.GetMorganFingerprintAsBitVect(mol, morgan_radius, nBits=morgan_feat_bits, useFeatures=True)
-    morgan_feat_arr = np.array(morgan_feat_fp, dtype=float)
+        # Feature-based Morgan (FCFP-like)
+        morgan_feat_fp = AllChem.GetMorganFingerprintAsBitVect(mol, morgan_radius, nBits=morgan_feat_bits, useFeatures=True)
+        morgan_feat_arr = np.array(morgan_feat_fp, dtype=float)
 
-    # MACCS
-    maccs_fp = MACCSkeys.GenMACCSKeys(mol)
-    maccs_arr = np.array(maccs_fp, dtype=float)
+        # MACCS
+        maccs_fp = MACCSkeys.GenMACCSKeys(mol)
+        maccs_arr = np.array(maccs_fp, dtype=float)
 
-    # Hashed Atom Pair
-    ap_fp = rdMolDescriptors.GetHashedAtomPairFingerprintAsBitVect(mol, nBits=ap_bits)
-    ap_arr = np.array(ap_fp, dtype=float)
+        # Hashed Atom Pair
+        ap_fp = rdMolDescriptors.GetHashedAtomPairFingerprintAsBitVect(mol, nBits=ap_bits)
+        ap_arr = np.array(ap_fp, dtype=float)
 
-    # Hashed Topological Torsion
-    tt_fp = rdMolDescriptors.GetHashedTopologicalTorsionFingerprintAsBitVect(mol, nBits=tt_bits)
-    tt_arr = np.array(tt_fp, dtype=float)
+        # Hashed Topological Torsion
+        tt_fp = rdMolDescriptors.GetHashedTopologicalTorsionFingerprintAsBitVect(mol, nBits=tt_bits)
+        tt_arr = np.array(tt_fp, dtype=float)
 
-    # TPSA
-    tpsa = rdMolDescriptors.CalcTPSA(mol)
-    tpsa_arr = np.array([tpsa], dtype=float)
+        # TPSA
+        tpsa = rdMolDescriptors.CalcTPSA(mol)
+        tpsa_arr = np.array([tpsa], dtype=float)
 
-    # Concatenate everything
-    return np.concatenate([morgan_arr, morgan_feat_arr, maccs_arr, ap_arr, tt_arr, tpsa_arr])
-
+        # Concatenate everything
+        return np.concatenate([morgan_arr, morgan_feat_arr, maccs_arr, ap_arr, tt_arr, tpsa_arr])
+    
+    except Exception:
+        return out
 
 # ===========================================
 # Node: process drug dataset
@@ -85,7 +95,7 @@ def process_drug_dataset(drug_raw: pd.DataFrame):
     y_atc = to_categorical(y_atc_int)
 
     # Prepare feature dataframe
-    drug_y_drug = df["IsDrug"].values.astype(int)
+    drug_y_drug = df["is_drug"].values.astype(int)
 
     # Save mapping for later use
     atc_mapping = pd.DataFrame({

@@ -94,7 +94,7 @@ multitask_val_atc_report:
 # ======================================
 drug_raw:
   type: pandas.CSVDataSet
-  filepath: data/01_raw/drugs_dataset/all_drugs_dataset.csv
+  filepath: data/01_raw/drugs_dataset/drugs_dataset_final.csv
 
 # ======================================
 # Processed outputs
