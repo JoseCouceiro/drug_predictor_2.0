@@ -8,14 +8,13 @@ def create_pipeline(**kwargs) -> Pipeline:
             func=train_multitask_model,
             inputs=[
                 "lipinski_model",
-                "drug_X",
-                "drug_y_drug",
-                "drug_y_atc",
-                # Train/val split needs to be handled in process_drug_data node: process_drug_dataset
+                "X_train",
+                "y_drug_train",
+                "y_atc_train",
                 "X_val",
                 "y_drug_val",
                 "y_atc_val",
-                "params:n_atc_classes"
+                "n_atc_classes"  # Now comes from data, not params
             ],
             outputs=["multitask_model", "multitask_training_history"],
             name="train_multitask_model_node"
@@ -41,4 +40,3 @@ def create_pipeline(**kwargs) -> Pipeline:
             name="evaluate_multitask_val_node"
         ),
     ])
-

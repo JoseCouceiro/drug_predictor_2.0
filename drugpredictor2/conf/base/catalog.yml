@@ -100,25 +100,64 @@ drug_raw:
 # Processed outputs
 # ======================================
 
-# Features (Morgan + MACCS + TPSA)
-drug_X:
+# Outputs from process_drug_data pipeline
+X_train:
   type: pickle.PickleDataSet
-  filepath: data/05_model_input/drug_X.pkl
-  backend: pickle
+  filepath: data/05_model_input/X_train.pkl
 
-# ATC categorical labels (one-hot encoded)
-drug_y_atc:
+X_val:
   type: pickle.PickleDataSet
-  filepath: data/05_model_input/drug_y_atc.pkl
-  backend: pickle
+  filepath: data/05_model_input/X_val.pkl
 
-# Binary drug label
-drug_y_drug:
+y_drug_train:
   type: pickle.PickleDataSet
-  filepath: data/05_model_input/drug_y_drug.pkl
-  backend: pickle
+  filepath: data/05_model_input/y_drug_train.pkl
 
-# Label mapping for reference
-atc_mapping:
+y_drug_val:
+  type: pickle.PickleDataSet
+  filepath: data/05_model_input/y_drug_val.pkl
+
+y_atc_train:
+  type: pickle.PickleDataSet
+  filepath: data/05_model_input/y_atc_train.pkl
+
+y_atc_val:
+  type: pickle.PickleDataSet
+  filepath: data/05_model_input/y_atc_val.pkl
+
+n_atc_classes:
+  type: yaml.YAMLDataSet
+  filepath: data/05_model_input/n_atc_classes.yml
+
+# Outputs from multitask_model pipeline
+multitask_model:
+  type: tensorflow.TensorFlowModelDataset
+  filepath: data/06_models/multitask_model
+
+multitask_training_history:
+  type: json.JSONDataSet
+  filepath: data/08_reporting/multitask_training_history.json
+
+multitask_train_predictions:
   type: pandas.CSVDataSet
-  filepath: data/08_reporting/atc_mapping.csv
+  filepath: data/07_model_output/multitask_train_predictions.csv
+
+multitask_val_predictions:
+  type: pandas.CSVDataSet
+  filepath: data/07_model_output/multitask_val_predictions.csv
+
+multitask_train_drug_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/multitask_train_drug_report.txt
+
+multitask_train_atc_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/multitask_train_atc_report.txt
+
+multitask_val_drug_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/multitask_val_drug_report.txt
+
+multitask_val_atc_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/multitask_val_atc_report.txt
