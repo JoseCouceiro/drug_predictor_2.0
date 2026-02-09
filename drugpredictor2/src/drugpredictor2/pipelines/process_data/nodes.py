@@ -10,13 +10,14 @@ from typing import Optional, Callable, Dict, Set, Any
 # --- Core functions ---
 
 def featurize_molecule(mol,
-                                morgan_bits=2048,
                                 morgan_radius=2,
+                                morgan_bits=2048,
                                 morgan_feat_bits=1024,
+                                MAACS_bits=167,
                                 ap_bits=1024,
-                                tt_bits=1024):
-    """
-    Returns concatenated numpy array of:
+                                tt_bits=1024,
+                                tapsa_weight=1) -> np.ndarray:
+    """    Returns concatenated numpy array of:º
       - Morgan (ECFP)
       - Feature-based Morgan (FCFP)
       - MACCS keys
@@ -26,7 +27,7 @@ def featurize_molecule(mol,
     """
 
     if mol is None:
-        total_len = morgan_bits + morgan_feat_bits + 166 + ap_bits + tt_bits + 1
+        total_len = morgan_bits + morgan_feat_bits + MAACS_bits + ap_bits + tt_bits + tapsa_weight
         return np.zeros(total_len, dtype=float)
 
     # Morgan ECFP

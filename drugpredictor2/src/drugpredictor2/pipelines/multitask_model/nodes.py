@@ -10,23 +10,23 @@ from sklearn.metrics import classification_report
 # Load pretrained Lipinski model and build multitask model
 # ====================================================
 def build_multitask_model(pretrained_model, n_atc_classes: int, input_dim: int):
-    """Load pretrained weights and add dual heads (drug/non-drug + ATC) using transfer learning."""
+    """Build multitask model using transfer learning from pretrained lipinski model."""
     
     # Create input layer for flat features
     input_layer = layers.Input(shape=(input_dim,))
     
-    # Reshape to (input_dim, 1) to match lipinski training format
+    # Reshape to (input_dim, 1) for Conv1D (matching lipinski model format)
     x = layers.Reshape((input_dim, 1))(input_layer)
     
-    # Apply pretrained layers (skip Input[0] and output[-1])
-    # Freeze these layers for transfer learning
-    for layer in pretrained_model.layers[1:-1]:
+    # Apply pretrained Conv1D and intermediate layers (skip only final output Dense[-1])
+    # Freeze pretrained layers for transfer learning
+    for layer in pretrained_model.layers[:-1]:
         layer.trainable = False
         x = layer(x)
     
-    # Add shared layer
-    shared = layers.Dense(256, activation="relu")(x)
-    shared = layers.Dropout(0.3)(shared)
+    # Add shared layer with unique names
+    shared = layers.Dense(256, activation="relu", name="shared_dense")(x)
+    shared = layers.Dropout(0.3, name="shared_dropout")(shared)
 
     # Head 1: drug vs non-drug
     drug_output = layers.Dense(1, activation="sigmoid", name="drug_output")(shared)
@@ -48,7 +48,10 @@ def build_multitask_model(pretrained_model, n_atc_classes: int, input_dim: int):
             "drug_output": 1.0,
             "atc_output": 0.5,
         },
-        metrics=["accuracy"],
+        metrics={
+            "drug_output": ["accuracy"],
+            "atc_output": ["accuracy"],
+        },
     )
 
     return multitask_model

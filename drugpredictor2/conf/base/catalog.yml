@@ -135,8 +135,9 @@ n_atc_classes:
 
 # Outputs from multitask_model pipeline
 multitask_model:
-  type: tensorflow.TensorFlowModelDataset
-  filepath: data/06_models/multitask_model
+  type: pickle.PickleDataSet
+  filepath: data/06_models/multitask_model.pkl
+  backend: pickle
 
 multitask_training_history:
   type: json.JSONDataSet
