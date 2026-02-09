@@ -9,14 +9,23 @@ from sklearn.metrics import classification_report
 # ====================================================
 # Load pretrained Lipinski model and build multitask model
 # ====================================================
-def build_multitask_model(pretrained_model, n_atc_classes: int):
-    """Load pretrained weights and add dual heads (drug/non-drug + ATC)."""
-    # Freeze the shared feature extractor from Lipinski model
-    pretrained_model.trainable = False
-
-    # Extract the backbone (everything before the output layer)
-    backbone_output = pretrained_model.layers[-2].output  # second-to-last layer
-    shared = layers.Dense(256, activation="relu")(backbone_output)
+def build_multitask_model(pretrained_model, n_atc_classes: int, input_dim: int):
+    """Load pretrained weights and add dual heads (drug/non-drug + ATC) using transfer learning."""
+    
+    # Create input layer for flat features
+    input_layer = layers.Input(shape=(input_dim,))
+    
+    # Reshape to (input_dim, 1) to match lipinski training format
+    x = layers.Reshape((input_dim, 1))(input_layer)
+    
+    # Apply pretrained layers (skip Input[0] and output[-1])
+    # Freeze these layers for transfer learning
+    for layer in pretrained_model.layers[1:-1]:
+        layer.trainable = False
+        x = layer(x)
+    
+    # Add shared layer
+    shared = layers.Dense(256, activation="relu")(x)
     shared = layers.Dropout(0.3)(shared)
 
     # Head 1: drug vs non-drug
@@ -26,7 +35,7 @@ def build_multitask_model(pretrained_model, n_atc_classes: int):
     atc_output = layers.Dense(n_atc_classes, activation="softmax", name="atc_output")(shared)
 
     multitask_model = models.Model(
-        inputs=pretrained_model.input, outputs=[drug_output, atc_output]
+        inputs=input_layer, outputs=[drug_output, atc_output]
     )
 
     multitask_model.compile(
@@ -37,7 +46,7 @@ def build_multitask_model(pretrained_model, n_atc_classes: int):
         },
         loss_weights={
             "drug_output": 1.0,
-            "atc_output": 0.5,  # tune this if ATC accuracy is low
+            "atc_output": 0.5,
         },
         metrics=["accuracy"],
     )
@@ -57,10 +66,10 @@ def train_multitask_model(
     y_drug_val,
     y_atc_val,
     n_atc_classes: int
-    # train/val split needs to be handled in process_drug_data node: process_drug_dataset
 ):
     """Train the multitask model using transfer learning."""
-    model = build_multitask_model(pretrained_model, n_atc_classes)
+    input_dim = X_train.shape[1]  # Get feature dimension from data
+    model = build_multitask_model(pretrained_model, n_atc_classes, input_dim)
 
     history = model.fit(
         X_train,
@@ -97,4 +106,3 @@ def evaluate_multitask_model(model, X, y_drug_true, y_atc_true):
     })
 
     return pred_df, drug_report, atc_report
-

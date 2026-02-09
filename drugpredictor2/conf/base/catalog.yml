@@ -101,6 +101,10 @@ drug_raw:
 # ======================================
 
 # Outputs from process_drug_data pipeline
+atc_mapping:
+  type: pandas.CSVDataSet
+  filepath: data/05_model_input/atc_mapping.csv
+  
 X_train:
   type: pickle.PickleDataSet
   filepath: data/05_model_input/X_train.pkl

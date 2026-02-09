@@ -6,6 +6,13 @@ from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.utils import to_categorical
 
+# Import the EXACT same featurization function used for lipinski model
+import sys
+from pathlib import Path
+# Add process_data to path to import its featurize_molecule
+sys.path.insert(0, str(Path(__file__).parent.parent / 'process_data'))
+from nodes import featurize_molecule
+
 
 # ===========================================
 # Utility functions
@@ -19,63 +26,19 @@ def mol_from_smiles(smiles: str):
         return None
 
 
-def compute_fingerprints(smiles: str,
-                        morgan_bits=2048,
-                        maccs_bits=167,
-                        scalar_bits=1,
-                        morgan_radius=2,
-                        morgan_feat_bits=1024,
-                        ap_bits=1024,
-                        tt_bits=1024):
+def compute_fingerprints_from_smiles(smiles: str):
     """
-    Returns concatenated numpy array of:
-      - Morgan (ECFP)
-      - Feature-based Morgan (FCFP)
-      - MACCS keys
-      - Hashed Atom Pair fingerprint
-      - Hashed Topological Torsion fingerprint
-      - TPSA (1 value)
+    Wrapper to convert SMILES to mol and compute fingerprints using the same
+    function as the lipinski model training (featurize_molecule from process_data).
     """
-    total_len = morgan_bits + morgan_feat_bits + maccs_bits + ap_bits + tt_bits + scalar_bits
-    out = np.zeros(total_len, dtype=float)
-
     if not isinstance(smiles, str):
-        return out
-    
-    try:
+        # Return zero array with correct size - will be determined by featurize_molecule
+        mol = None
+    else:
         mol = mol_from_smiles(smiles)
-        if mol is None:
-            return out
-
-        # Morgan ECFP
-        morgan_fp = AllChem.GetMorganFingerprintAsBitVect(mol, morgan_radius, nBits=morgan_bits, useFeatures=False)
-        morgan_arr = np.array(morgan_fp, dtype=float)
-
-        # Feature-based Morgan (FCFP-like)
-        morgan_feat_fp = AllChem.GetMorganFingerprintAsBitVect(mol, morgan_radius, nBits=morgan_feat_bits, useFeatures=True)
-        morgan_feat_arr = np.array(morgan_feat_fp, dtype=float)
-
-        # MACCS
-        maccs_fp = MACCSkeys.GenMACCSKeys(mol)
-        maccs_arr = np.array(maccs_fp, dtype=float)
-
-        # Hashed Atom Pair
-        ap_fp = rdMolDescriptors.GetHashedAtomPairFingerprintAsBitVect(mol, nBits=ap_bits)
-        ap_arr = np.array(ap_fp, dtype=float)
-
-        # Hashed Topological Torsion
-        tt_fp = rdMolDescriptors.GetHashedTopologicalTorsionFingerprintAsBitVect(mol, nBits=tt_bits)
-        tt_arr = np.array(tt_fp, dtype=float)
-
-        # TPSA
-        tpsa = rdMolDescriptors.CalcTPSA(mol)
-        tpsa_arr = np.array([tpsa], dtype=float)
-
-        # Concatenate everything
-        return np.concatenate([morgan_arr, morgan_feat_arr, maccs_arr, ap_arr, tt_arr, tpsa_arr])
     
-    except Exception:
-        return out
+    # Use the EXACT same featurization as lipinski model
+    return featurize_molecule(mol)
 
 # ===========================================
 # Node: process drug dataset
@@ -85,9 +48,9 @@ def process_drug_dataset(drug_raw: pd.DataFrame):
     """Process the drug dataset to generate features and labels."""
     df = drug_raw.copy()
 
-    # Compute fingerprints/descriptors
-    print("Computing fingerprints for all molecules...")
-    X = np.stack(df["IsomericSMILES"].map(compute_fingerprints))
+    # Compute fingerprints/descriptors using THE SAME function as lipinski model
+    print("Computing fingerprints for all molecules (using lipinski fingerprint function)...")
+    X = np.stack(df["IsomericSMILES"].map(compute_fingerprints_from_smiles))
 
 
     # Encode ATC classes
