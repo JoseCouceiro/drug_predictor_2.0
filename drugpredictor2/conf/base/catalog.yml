@@ -89,6 +89,87 @@ multitask_val_atc_report:
   type: text.TextDataSet
   filepath: data/08_reporting/multitask_val_atc_report.txt
 
+# ================================
+# Hierarchical Classification: Filtered Datasets (Drugs Only for ATC)
+# ================================
+
+X_train_drugs_only:
+  type: pickle.PickleDataSet
+  filepath: data/05_model_input/X_train_drugs_only.pkl
+
+X_val_drugs_only:
+  type: pickle.PickleDataSet
+  filepath: data/05_model_input/X_val_drugs_only.pkl
+
+y_atc_train_drugs_only:
+  type: pickle.PickleDataSet
+  filepath: data/05_model_input/y_atc_train_drugs_only.pkl
+
+y_atc_val_drugs_only:
+  type: pickle.PickleDataSet
+  filepath: data/05_model_input/y_atc_val_drugs_only.pkl
+
+n_atc_classes_drugs_only:
+  type: yaml.YAMLDataSet
+  filepath: data/05_model_input/n_atc_classes_drugs_only.yml
+
+# ================================
+# Drug Binary Classifier (Model 1)
+# ================================
+
+drug_classifier_model:
+  type: pickle.PickleDataSet
+  filepath: data/06_models/drug_classifier_model.pkl
+  backend: pickle
+
+drug_classifier_history:
+  type: json.JSONDataSet
+  filepath: data/08_reporting/drug_classifier_history.json
+
+drug_classifier_train_predictions:
+  type: pandas.CSVDataSet
+  filepath: data/07_model_output/drug_classifier_train_predictions.csv
+
+drug_classifier_val_predictions:
+  type: pandas.CSVDataSet
+  filepath: data/07_model_output/drug_classifier_val_predictions.csv
+
+drug_classifier_train_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/drug_classifier_train_report.txt
+
+drug_classifier_val_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/drug_classifier_val_report.txt
+
+# ================================
+# ATC Classifier (Model 2 - Drugs Only)
+# ================================
+
+atc_classifier_model:
+  type: pickle.PickleDataSet
+  filepath: data/06_models/atc_classifier_model.pkl
+  backend: pickle
+
+atc_classifier_history:
+  type: json.JSONDataSet
+  filepath: data/08_reporting/atc_classifier_history.json
+
+atc_classifier_train_predictions:
+  type: pandas.CSVDataSet
+  filepath: data/07_model_output/atc_classifier_train_predictions.csv
+
+atc_classifier_val_predictions:
+  type: pandas.CSVDataSet
+  filepath: data/07_model_output/atc_classifier_val_predictions.csv
+
+atc_classifier_train_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/atc_classifier_train_report.txt
+
+atc_classifier_val_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/atc_classifier_val_report.txt
 # ======================================
 # Raw drug dataset
 # ======================================
@@ -104,6 +185,10 @@ drug_raw:
 atc_mapping:
   type: pandas.CSVDataSet
   filepath: data/05_model_input/atc_mapping.csv
+
+atc_mapping_drugs_only:
+  type: pandas.CSVDataSet
+  filepath: data/08_reporting/atc_mapping_drugs_only.csv
   
 X_train:
   type: pickle.PickleDataSet
