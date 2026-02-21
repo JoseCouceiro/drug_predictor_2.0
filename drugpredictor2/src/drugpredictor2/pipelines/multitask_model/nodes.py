@@ -1,10 +1,64 @@
+import gc
 import json
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers, models
 from sklearn.metrics import classification_report
 from sklearn.utils.class_weight import compute_class_weight
+
+
+# ====================================================
+# Transfer Learning Helpers
+# ====================================================
+def _clone_conv1d_backbone(pretrained_model, input_dim):
+    """Clone ONLY the Conv1D + Flatten layers from the pretrained lipinski model.
+    
+    The Conv1D layer is a general "fingerprint reader" trained on hundreds of
+    thousands of molecules — it learned to parse molecular fingerprints, which
+    is a transferable skill.  The Dense layers above it are lipinski-specific
+    (charge / size / hydrophobicity thresholds) and should NOT be transferred.
+    
+    The Conv1D is frozen; each downstream task builds its own Dense stack.
+    
+    Args:
+        pretrained_model: Trained lipinski Keras model (Sequential Conv1D).
+        input_dim: Number of flat input features (e.g. 6288).
+    
+    Returns:
+        (input_layer, x) — Keras tensors ready for a new Dense head.
+    """
+    input_layer = layers.Input(shape=(input_dim,), name="tl_input")
+    x = layers.Reshape((input_dim, 1), name="tl_reshape")(input_layer)
+
+    # Find the Conv1D and Flatten layers only
+    source_layers = [
+        l for l in pretrained_model.layers
+        if not isinstance(l, layers.InputLayer)
+    ]
+
+    for src_layer in source_layers:
+        is_conv = isinstance(src_layer, layers.Conv1D)
+        is_flatten = isinstance(src_layer, layers.Flatten)
+        if not (is_conv or is_flatten):
+            continue  # skip Dense, Dropout, BN — those are lipinski-specific
+
+        config = src_layer.get_config()
+        config["name"] = f"tl_{config['name']}"
+        new_layer = src_layer.__class__.from_config(config)
+        x = new_layer(x)
+
+        if src_layer.get_weights():
+            new_layer.set_weights(src_layer.get_weights())
+
+        # Freeze the Conv1D — it's already a good fingerprint reader
+        new_layer.trainable = False
+
+        if is_flatten:
+            break  # stop after Flatten — everything above is task-specific
+
+    return input_layer, x
 
 
 # ====================================================
@@ -77,38 +131,35 @@ def create_atc_mapping_drugs_only(atc_mapping):
 
 
 # ====================================================
-# MODEL 1: Drug vs Non-Drug Binary Classifier
+# MODEL 1: Drug vs Non-Drug Binary Classifier (Transfer Learning)
 # ====================================================
 def build_drug_classifier(pretrained_model, input_dim: int):
-    """Build binary drug classifier using transfer learning from pretrained lipinski model."""
+    """Build binary drug classifier using transfer learning from lipinski model.
     
-    # Create input layer for flat features
-    input_layer = layers.Input(shape=(input_dim,))
-    
-    # Reshape to (input_dim, 1) for Conv1D (matching lipinski model format)
-    x = layers.Reshape((input_dim, 1))(input_layer)
-    
-    # Apply pretrained layers: UNFREEZE ALL for full fine-tuning
-    # Skip final output layer ([-1])
-    for layer in pretrained_model.layers[:-1]:
-        layer.trainable = True  # Unfreeze all layers for better learning
-        x = layer(x)
-    
-    # Add BIGGER classification head - more capacity to learn
+    Only the Conv1D fingerprint-reader is transferred (frozen).  All Dense
+    layers are trained from scratch — the drug/non-drug decision surface is
+    very different from the lipinski compliance surface.
+    """
+    input_layer, x = _clone_conv1d_backbone(pretrained_model, input_dim)
+
+    # Fresh Dense stack trained from scratch
     x = layers.Dense(512, activation="relu", name="drug_dense_1")(x)
     x = layers.BatchNormalization(name="drug_bn_1")(x)
+    x = layers.Dropout(0.4, name="drug_dropout_1")(x)
+
     x = layers.Dense(256, activation="relu", name="drug_dense_2")(x)
     x = layers.BatchNormalization(name="drug_bn_2")(x)
+    x = layers.Dropout(0.3, name="drug_dropout_2")(x)
+
     x = layers.Dense(128, activation="relu", name="drug_dense_3")(x)
-    x = layers.BatchNormalization(name="drug_bn_3")(x)
-    
-    # Output: binary classification (drug vs non-drug)
+    x = layers.Dropout(0.3, name="drug_dropout_3")(x)
+
     output = layers.Dense(1, activation="sigmoid", name="drug_output")(x)
 
     model = models.Model(inputs=input_layer, outputs=output)
 
     model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=5e-4),  # Higher LR for faster learning
+        optimizer=keras.optimizers.Adam(learning_rate=5e-4),
         loss="binary_crossentropy",
         metrics=["accuracy", keras.metrics.Precision(), keras.metrics.Recall()],
     )
@@ -117,9 +168,22 @@ def build_drug_classifier(pretrained_model, input_dim: int):
 
 
 def train_drug_classifier(pretrained_model, X_train, y_train, X_val, y_val):
-    """Train the binary drug classifier."""
+    """Train the binary drug classifier with transfer learning from lipinski."""
+    # Free any leftover GPU memory from previous runs
+    keras.backend.clear_session()
+    gc.collect()
+
     input_dim = X_train.shape[1]
     model = build_drug_classifier(pretrained_model, input_dim)
+    
+    print("="*60)
+    print("TRAINING DRUG CLASSIFIER (transfer learning from lipinski)")
+    print("="*60)
+    # Summary showing frozen vs trainable layers
+    trainable = sum(l.count_params() for l in model.layers if l.trainable)
+    total = model.count_params()
+    print(f"Total params: {total:,} | Trainable: {trainable:,} "
+          f"({100*trainable/total:.1f}%) | Frozen: {total-trainable:,}")
 
     # Report class distribution
     print(f"Drug class distribution - Train: {np.bincount(y_train.flatten())}")
@@ -137,17 +201,17 @@ def train_drug_classifier(pretrained_model, X_train, y_train, X_val, y_val):
     # Add callbacks for better training
     callbacks = [
         keras.callbacks.EarlyStopping(
-            monitor='val_accuracy',  # Monitor accuracy instead of loss
-            patience=20,  # More patience
-            mode='max',
+            monitor='val_loss',
+            patience=15,
+            mode='min',
             restore_best_weights=True,
             verbose=1
         ),
         keras.callbacks.ReduceLROnPlateau(
             monitor='val_loss',
             factor=0.5,
-            patience=7,
-            min_lr=1e-6,
+            patience=5,
+            min_lr=1e-7,
             verbose=1
         )
     ]
@@ -157,8 +221,8 @@ def train_drug_classifier(pretrained_model, X_train, y_train, X_val, y_val):
         y_train,
         validation_data=(X_val, y_val),
         class_weight=class_weight_dict,
-        epochs=200,  # More epochs - let it learn!
-        batch_size=64,  # Smaller batches for better gradients
+        epochs=200,
+        batch_size=64,
         callbacks=callbacks,
         verbose=1,
     )
@@ -168,7 +232,7 @@ def train_drug_classifier(pretrained_model, X_train, y_train, X_val, y_val):
 
 def evaluate_drug_classifier(model, X, y_true):
     """Evaluate drug classifier and generate classification report."""
-    y_pred_prob = model.predict(X)
+    y_pred_prob = model.predict(X, batch_size=256)
     y_pred = (y_pred_prob > 0.5).astype(int)
 
     # Classification report
@@ -190,40 +254,33 @@ def evaluate_drug_classifier(model, X, y_true):
 def build_atc_classifier(pretrained_model, n_atc_classes: int, input_dim: int):
     """Build ATC classifier using transfer learning from pretrained lipinski model.
     
+    Only the Conv1D fingerprint-reader is transferred (frozen).  Fresh Dense
+    layers are trained from scratch with label smoothing to handle the
+    imbalanced 16-class ATC problem.
+    
     Note: This model should ONLY be trained on drug samples (excluding ND/non-drugs).
     """
-    
-    # Create input layer for flat features
-    input_layer = layers.Input(shape=(input_dim,))
-    
-    # Reshape to (input_dim, 1) for Conv1D (matching lipinski model format)
-    x = layers.Reshape((input_dim, 1))(input_layer)
-    
-    # Apply pretrained layers: Unfreeze last 2 dense layers for fine-tuning
-    # Skip final output layer ([-1])
-    num_layers = len(pretrained_model.layers) - 1
-    for i, layer in enumerate(pretrained_model.layers[:-1]):
-        # Freeze Conv1D and first dense layers, unfreeze last 2 dense layers
-        if i < num_layers - 2:
-            layer.trainable = False
-        else:
-            layer.trainable = True  # Fine-tune last 2 layers
-        x = layer(x)
-    
-    # Add classification head for ATC
+    input_layer, x = _clone_conv1d_backbone(pretrained_model, input_dim)
+
+    # Fresh Dense stack trained from scratch
     x = layers.Dense(512, activation="relu", name="atc_dense_1")(x)
-    x = layers.Dropout(0.3, name="atc_dropout_1")(x)
+    x = layers.BatchNormalization(name="atc_bn_1")(x)
+    x = layers.Dropout(0.4, name="atc_dropout_1")(x)
+
     x = layers.Dense(256, activation="relu", name="atc_dense_2")(x)
-    x = layers.Dropout(0.2, name="atc_dropout_2")(x)
-    
-    # Output: multiclass classification (ATC categories)
+    x = layers.BatchNormalization(name="atc_bn_2")(x)
+    x = layers.Dropout(0.3, name="atc_dropout_2")(x)
+
+    x = layers.Dense(128, activation="relu", name="atc_dense_3")(x)
+    x = layers.Dropout(0.3, name="atc_dropout_3")(x)
+
     output = layers.Dense(n_atc_classes, activation="softmax", name="atc_output")(x)
 
     model = models.Model(inputs=input_layer, outputs=output)
 
     model.compile(
-        optimizer="adam",
-        loss="categorical_crossentropy",
+        optimizer=keras.optimizers.Adam(learning_rate=5e-4),
+        loss=keras.losses.CategoricalCrossentropy(label_smoothing=0.1),
         metrics=["accuracy"],
     )
 
@@ -238,9 +295,24 @@ def train_atc_classifier(
     y_val, 
     n_atc_classes: int
 ):
-    """Train the ATC classifier on drug samples only (no ND/non-drugs)."""
+    """Train the ATC classifier on drug samples only (no ND/non-drugs).
+    
+    Uses transfer learning from the lipinski pretrained backbone.
+    """
+    # Free GPU memory from drug classifier before building ATC model
+    keras.backend.clear_session()
+    gc.collect()
+
     input_dim = X_train.shape[1]
     model = build_atc_classifier(pretrained_model, n_atc_classes, input_dim)
+
+    print("="*60)
+    print("TRAINING ATC CLASSIFIER (transfer learning from lipinski)")
+    print("="*60)
+    trainable = sum(l.count_params() for l in model.layers if l.trainable)
+    total = model.count_params()
+    print(f"Total params: {total:,} | Trainable: {trainable:,} "
+          f"({100*trainable/total:.1f}%) | Frozen: {total-trainable:,}")
 
     # Report class distribution
     y_train_classes = np.argmax(y_train, axis=1)
@@ -257,13 +329,32 @@ def train_atc_classifier(
     class_weight_dict = {i: weight for i, weight in enumerate(class_weights_array)}
     print(f"ATC class weights: {class_weight_dict}")
 
+    # Callbacks for proper training control
+    callbacks = [
+        keras.callbacks.EarlyStopping(
+            monitor='val_accuracy',
+            patience=20,
+            mode='max',
+            restore_best_weights=True,
+            verbose=1
+        ),
+        keras.callbacks.ReduceLROnPlateau(
+            monitor='val_loss',
+            factor=0.5,
+            patience=7,
+            min_lr=1e-7,
+            verbose=1
+        )
+    ]
+
     history = model.fit(
         X_train,
         y_train,
         validation_data=(X_val, y_val),
         class_weight=class_weight_dict,
-        epochs=50,
-        batch_size=128,
+        epochs=200,
+        batch_size=32,
+        callbacks=callbacks,
         verbose=1,
     )
 
@@ -272,7 +363,7 @@ def train_atc_classifier(
 
 def evaluate_atc_classifier(model, X, y_true):
     """Evaluate ATC classifier and generate classification report."""
-    y_pred_prob = model.predict(X)
+    y_pred_prob = model.predict(X, batch_size=256)
     y_pred = np.argmax(y_pred_prob, axis=1)
     y_true_classes = np.argmax(y_true, axis=1)
 
