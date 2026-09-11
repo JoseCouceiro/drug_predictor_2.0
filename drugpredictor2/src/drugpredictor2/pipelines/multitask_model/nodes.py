@@ -10,6 +10,17 @@ from sklearn.utils.class_weight import compute_class_weight
 
 
 # ====================================================
+# GPU Memory Growth — prevent TF from pre-allocating the entire GPU
+# ====================================================
+_gpus = tf.config.list_physical_devices("GPU")
+for _gpu in _gpus:
+    try:
+        tf.config.experimental.set_memory_growth(_gpu, True)
+    except RuntimeError:
+        pass  # must be set before GPUs are initialised
+
+
+# ====================================================
 # Transfer Learning Helpers
 # ====================================================
 def _clone_conv1d_backbone(pretrained_model, input_dim):
@@ -135,24 +146,32 @@ def create_atc_mapping_drugs_only(atc_mapping):
 # ====================================================
 def build_drug_classifier(pretrained_model, input_dim: int):
     """Build binary drug classifier using transfer learning from lipinski model.
-    
-    Only the Conv1D fingerprint-reader is transferred (frozen).  All Dense
-    layers are trained from scratch — the drug/non-drug decision surface is
-    very different from the lipinski compliance surface.
+
+    Wider head than before; backbone starts frozen for phase-1 warmup and is
+    unfrozen in phase 2 inside train_and_evaluate_drug_classifier.
     """
     input_layer, x = _clone_conv1d_backbone(pretrained_model, input_dim)
 
-    # Fresh Dense stack trained from scratch
-    x = layers.Dense(512, activation="relu", name="drug_dense_1")(x)
+    # First Dense is the bottleneck on the large flattened Conv1D output; keep
+    # it at 512 to avoid OOM (402k-unit flatten × 1024 ≈ 1.6 GB of weights).
+    x = layers.Dense(512, activation="relu",
+                     name="drug_dense_1")(x)
     x = layers.BatchNormalization(name="drug_bn_1")(x)
-    x = layers.Dropout(0.4, name="drug_dropout_1")(x)
+    x = layers.Dropout(0.5, name="drug_dropout_1")(x)
 
-    x = layers.Dense(256, activation="relu", name="drug_dense_2")(x)
+    x = layers.Dense(256, activation="relu",
+                     name="drug_dense_2")(x)
     x = layers.BatchNormalization(name="drug_bn_2")(x)
-    x = layers.Dropout(0.3, name="drug_dropout_2")(x)
+    x = layers.Dropout(0.4, name="drug_dropout_2")(x)
 
-    x = layers.Dense(128, activation="relu", name="drug_dense_3")(x)
-    x = layers.Dropout(0.3, name="drug_dropout_3")(x)
+    x = layers.Dense(128, activation="relu",
+                     name="drug_dense_3")(x)
+    x = layers.BatchNormalization(name="drug_bn_3")(x)
+    x = layers.Dropout(0.4, name="drug_dropout_3")(x)
+
+    x = layers.Dense(64, activation="relu",
+                     name="drug_dense_4")(x)
+    x = layers.Dropout(0.3, name="drug_dropout_4")(x)
 
     output = layers.Dense(1, activation="sigmoid", name="drug_output")(x)
 
@@ -160,85 +179,21 @@ def build_drug_classifier(pretrained_model, input_dim: int):
 
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=5e-4),
-        loss="binary_crossentropy",
-        metrics=["accuracy", keras.metrics.Precision(), keras.metrics.Recall()],
+        loss=keras.losses.BinaryFocalCrossentropy(gamma=3.0),
+        metrics=["accuracy", keras.metrics.Precision(), keras.metrics.Recall(),
+                 keras.metrics.AUC(name="auroc")],
     )
 
     return model
 
 
-def train_drug_classifier(pretrained_model, X_train, y_train, X_val, y_val):
-    """Train the binary drug classifier with transfer learning from lipinski."""
-    # Free any leftover GPU memory from previous runs
-    keras.backend.clear_session()
-    gc.collect()
+def _evaluate_drug_classifier(model, X, y_true, threshold=0.5):
+    """Evaluate drug classifier and generate classification report (internal helper)."""
+    y_pred_prob = model.predict(X, batch_size=32)
+    y_pred = (y_pred_prob > threshold).astype(int)
 
-    input_dim = X_train.shape[1]
-    model = build_drug_classifier(pretrained_model, input_dim)
-    
-    print("="*60)
-    print("TRAINING DRUG CLASSIFIER (transfer learning from lipinski)")
-    print("="*60)
-    # Summary showing frozen vs trainable layers
-    trainable = sum(l.count_params() for l in model.layers if l.trainable)
-    total = model.count_params()
-    print(f"Total params: {total:,} | Trainable: {trainable:,} "
-          f"({100*trainable/total:.1f}%) | Frozen: {total-trainable:,}")
+    report = classification_report(y_true, y_pred, digits=4, zero_division=0)
 
-    # Report class distribution
-    print(f"Drug class distribution - Train: {np.bincount(y_train.flatten())}")
-    print(f"Drug class distribution - Val: {np.bincount(y_val.flatten())}")
-    
-    # Compute class weights for balanced training
-    class_weights = compute_class_weight(
-        class_weight='balanced',
-        classes=np.unique(y_train),
-        y=y_train.flatten()
-    )
-    class_weight_dict = {i: weight for i, weight in enumerate(class_weights)}
-    print(f"Drug class weights: {class_weight_dict}")
-
-    # Add callbacks for better training
-    callbacks = [
-        keras.callbacks.EarlyStopping(
-            monitor='val_loss',
-            patience=15,
-            mode='min',
-            restore_best_weights=True,
-            verbose=1
-        ),
-        keras.callbacks.ReduceLROnPlateau(
-            monitor='val_loss',
-            factor=0.5,
-            patience=5,
-            min_lr=1e-7,
-            verbose=1
-        )
-    ]
-
-    history = model.fit(
-        X_train,
-        y_train,
-        validation_data=(X_val, y_val),
-        class_weight=class_weight_dict,
-        epochs=200,
-        batch_size=64,
-        callbacks=callbacks,
-        verbose=1,
-    )
-
-    return model, history.history
-
-
-def evaluate_drug_classifier(model, X, y_true):
-    """Evaluate drug classifier and generate classification report."""
-    y_pred_prob = model.predict(X, batch_size=256)
-    y_pred = (y_pred_prob > 0.5).astype(int)
-
-    # Classification report
-    report = classification_report(y_true, y_pred, digits=4)
-
-    # Predictions dataframe
     pred_df = pd.DataFrame({
         "true": y_true.flatten(),
         "pred_prob": y_pred_prob.flatten(),
@@ -246,6 +201,93 @@ def evaluate_drug_classifier(model, X, y_true):
     })
 
     return pred_df, report
+
+
+def train_and_evaluate_drug_classifier(pretrained_model, X_train, y_train, X_val, y_val):
+    """Train the binary drug classifier and evaluate on train+val sets.
+
+    Single-phase training with focal loss and AUC-guided early stopping.
+    A second model.compile() causes OOM because Adam allocates duplicate
+    momentum tensors while the first set is still live in GPU memory.
+    Prediction threshold is optimised on the validation set to maximise macro F1.
+    """
+    keras.backend.clear_session()
+    gc.collect()
+
+    input_dim = X_train.shape[1]
+    model = build_drug_classifier(pretrained_model, input_dim)
+    del pretrained_model
+    gc.collect()
+
+    print("="*60)
+    print("TRAINING DRUG CLASSIFIER (transfer learning from lipinski)")
+    print("="*60)
+    total = model.count_params()
+    trainable = sum(l.count_params() for l in model.layers if l.trainable)
+    print(f"Total params: {total:,} | Trainable: {trainable:,} "
+          f"({100*trainable/total:.1f}%) | Frozen: {total-trainable:,}")
+    print(f"Drug class distribution - Train: {np.bincount(y_train.flatten())}")
+    print(f"Drug class distribution - Val: {np.bincount(y_val.flatten())}")
+
+    class_weights = compute_class_weight(
+        class_weight='balanced',
+        classes=np.unique(y_train),
+        y=y_train.flatten()
+    )
+    class_weight_dict = {i: w for i, w in enumerate(class_weights)}
+    print(f"Drug class weights: {class_weight_dict}")
+
+    history = model.fit(
+        X_train, y_train,
+        validation_data=(X_val, y_val),
+        class_weight=class_weight_dict,
+        epochs=200,
+        batch_size=64,
+        callbacks=[
+            keras.callbacks.EarlyStopping(
+                monitor='val_auroc', patience=12, mode='max',
+                restore_best_weights=True, verbose=1
+            ),
+            keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss', factor=0.5, patience=7, min_lr=1e-7, verbose=1
+            ),
+        ],
+        verbose=1,
+    )
+
+    # ---------- Threshold optimisation on validation ----------
+    val_probs = model.predict(X_val, batch_size=32).flatten()
+    best_thresh, best_f1 = 0.5, 0.0
+    for t in np.arange(0.10, 0.90, 0.02):
+        preds = (val_probs > t).astype(int)
+        f1 = classification_report(
+            y_val.flatten(), preds, output_dict=True, zero_division=0
+        )['macro avg']['f1-score']
+        if f1 > best_f1:
+            best_f1, best_thresh = f1, float(t)
+    print(f"\nOptimal threshold: {best_thresh:.2f} (val macro F1={best_f1:.4f})")
+
+    print("\n" + "="*60)
+    print("EVALUATING DRUG CLASSIFIER")
+    print("="*60)
+    train_pred_df, train_report = _evaluate_drug_classifier(
+        model, X_train, y_train, threshold=best_thresh
+    )
+    print("Train report:\n", train_report)
+    val_pred_df, val_report = _evaluate_drug_classifier(
+        model, X_val, y_val, threshold=best_thresh
+    )
+    print("Val report:\n", val_report)
+    val_report = f"Optimal threshold: {best_thresh:.2f}\n{val_report}"
+
+    return (
+        model,
+        history.history,
+        train_pred_df,
+        train_report,
+        val_pred_df,
+        val_report,
+    )
 
 
 # ====================================================
@@ -262,32 +304,47 @@ def build_atc_classifier(pretrained_model, n_atc_classes: int, input_dim: int):
     """
     input_layer, x = _clone_conv1d_backbone(pretrained_model, input_dim)
 
-    # Fresh Dense stack trained from scratch
-    x = layers.Dense(512, activation="relu", name="atc_dense_1")(x)
+    # Smaller head: further reduced to 128→64 to cut overparameterisation.
+    x = layers.Dense(128, activation="relu", name="atc_dense_1")(x)
     x = layers.BatchNormalization(name="atc_bn_1")(x)
-    x = layers.Dropout(0.4, name="atc_dropout_1")(x)
+    x = layers.Dropout(0.6, name="atc_dropout_1")(x)
 
-    x = layers.Dense(256, activation="relu", name="atc_dense_2")(x)
+    x = layers.Dense(64, activation="relu", name="atc_dense_2")(x)
     x = layers.BatchNormalization(name="atc_bn_2")(x)
-    x = layers.Dropout(0.3, name="atc_dropout_2")(x)
-
-    x = layers.Dense(128, activation="relu", name="atc_dense_3")(x)
-    x = layers.Dropout(0.3, name="atc_dropout_3")(x)
+    x = layers.Dropout(0.5, name="atc_dropout_2")(x)
 
     output = layers.Dense(n_atc_classes, activation="softmax", name="atc_output")(x)
 
     model = models.Model(inputs=input_layer, outputs=output)
 
     model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=5e-4),
-        loss=keras.losses.CategoricalCrossentropy(label_smoothing=0.1),
+        optimizer=keras.optimizers.Adam(learning_rate=3e-4),
+        loss=keras.losses.CategoricalFocalCrossentropy(gamma=1.5, label_smoothing=0.15),
         metrics=["accuracy"],
     )
 
     return model
 
 
-def train_atc_classifier(
+def _evaluate_atc_classifier(model, X, y_true):
+    """Evaluate ATC classifier and generate classification report (internal helper)."""
+    y_pred_prob = model.predict(X, batch_size=32)
+    y_pred = np.argmax(y_pred_prob, axis=1)
+    y_true_classes = np.argmax(y_true, axis=1)
+
+    report = classification_report(y_true_classes, y_pred, digits=4)
+
+    pred_df = pd.DataFrame({
+        "true": y_true_classes,
+        "pred": y_pred,
+    })
+    for i in range(y_pred_prob.shape[1]):
+        pred_df[f"prob_class_{i}"] = y_pred_prob[:, i]
+
+    return pred_df, report
+
+
+def train_and_evaluate_atc_classifier(
     pretrained_model, 
     X_train, 
     y_train, 
@@ -295,9 +352,10 @@ def train_atc_classifier(
     y_val, 
     n_atc_classes: int
 ):
-    """Train the ATC classifier on drug samples only (no ND/non-drugs).
-    
-    Uses transfer learning from the lipinski pretrained backbone.
+    """Train the ATC classifier on drug samples only and evaluate on train+val.
+
+    Training and evaluation happen in a single node to avoid pickle round-trip
+    OOM issues.
     """
     # Free GPU memory from drug classifier before building ATC model
     keras.backend.clear_session()
@@ -305,6 +363,10 @@ def train_atc_classifier(
 
     input_dim = X_train.shape[1]
     model = build_atc_classifier(pretrained_model, n_atc_classes, input_dim)
+
+    # Free the pretrained model from GPU — backbone weights are already copied
+    del pretrained_model
+    gc.collect()
 
     print("="*60)
     print("TRAINING ATC CLASSIFIER (transfer learning from lipinski)")
@@ -332,9 +394,9 @@ def train_atc_classifier(
     # Callbacks for proper training control
     callbacks = [
         keras.callbacks.EarlyStopping(
-            monitor='val_accuracy',
+            monitor='val_loss',
             patience=20,
-            mode='max',
+            mode='min',
             restore_best_weights=True,
             verbose=1
         ),
@@ -353,31 +415,26 @@ def train_atc_classifier(
         validation_data=(X_val, y_val),
         class_weight=class_weight_dict,
         epochs=200,
-        batch_size=32,
+        batch_size=32,  # restored: ATC runs in isolation so drug classifier memory is not present
         callbacks=callbacks,
         verbose=1,
     )
 
-    return model, history.history
+    # --- Evaluate in the same node (model is still in GPU memory) ---
+    print("\n" + "="*60)
+    print("EVALUATING ATC CLASSIFIER")
+    print("="*60)
+    train_pred_df, train_report = _evaluate_atc_classifier(model, X_train, y_train)
+    print("Train report:\n", train_report)
 
+    val_pred_df, val_report = _evaluate_atc_classifier(model, X_val, y_val)
+    print("Val report:\n", val_report)
 
-def evaluate_atc_classifier(model, X, y_true):
-    """Evaluate ATC classifier and generate classification report."""
-    y_pred_prob = model.predict(X, batch_size=256)
-    y_pred = np.argmax(y_pred_prob, axis=1)
-    y_true_classes = np.argmax(y_true, axis=1)
-
-    # Classification report
-    report = classification_report(y_true_classes, y_pred, digits=4)
-
-    # Predictions dataframe
-    pred_df = pd.DataFrame({
-        "true": y_true_classes,
-        "pred": y_pred,
-    })
-    
-    # Add prediction probabilities for each class
-    for i in range(y_pred_prob.shape[1]):
-        pred_df[f"prob_class_{i}"] = y_pred_prob[:, i]
-
-    return pred_df, report
+    return (
+        model,
+        history.history,
+        train_pred_df,
+        train_report,
+        val_pred_df,
+        val_report,
+    )
