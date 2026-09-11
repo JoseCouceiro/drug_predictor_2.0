@@ -7,7 +7,7 @@ def create_pipeline(**kwargs) -> Pipeline:
     return pipeline([
         node(
             func=process_drug_dataset,
-            inputs="drug_raw",
+            inputs=["drug_raw", "params:atc_subset"],
             outputs=["drug_X", "drug_y_drug", "drug_y_atc", "atc_mapping"],
             name="process_drug_dataset_node"
         ),

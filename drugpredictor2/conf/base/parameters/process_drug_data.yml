@@ -3,3 +3,9 @@
 #
 # Documentation for this file format can be found in "Parameters"
 # Link: https://docs.kedro.org/en/0.18.10/kedro_project_setup/configuration.html#parameters
+
+# ATC codes to include in the classifier (comma-separated string).
+# Use null to include all available codes (minus V which is always excluded).
+# action_based: "J,L,B,A,P,H"
+# organ_based:  "N,C,R,D,G,S,M,O,I"
+atc_subset: "N,C,R,D,G,S,M,O,I"

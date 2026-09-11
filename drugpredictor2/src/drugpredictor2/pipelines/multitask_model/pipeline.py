@@ -3,10 +3,8 @@ from .nodes import (
     filter_drugs_only,
     get_num_atc_classes_drugs_only,
     create_atc_mapping_drugs_only,
-    train_drug_classifier, 
-    evaluate_drug_classifier,
-    train_atc_classifier,
-    evaluate_atc_classifier
+    train_and_evaluate_drug_classifier,
+    train_and_evaluate_atc_classifier,
 )
 
 
@@ -44,10 +42,10 @@ def create_pipeline(**kwargs) -> Pipeline:
         ),
     ])
     
-    # Pipeline 1: Binary Drug Classifier (all samples)
+    # Pipeline 1: Binary Drug Classifier — train + evaluate in one node
     drug_pipeline = pipeline([
         node(
-            func=train_drug_classifier,
+            func=train_and_evaluate_drug_classifier,
             inputs=[
                 "lipinski_model",
                 "X_train",
@@ -55,61 +53,39 @@ def create_pipeline(**kwargs) -> Pipeline:
                 "X_val",
                 "y_drug_val",
             ],
-            outputs=["drug_classifier_model", "drug_classifier_history"],
-            name="train_drug_classifier_node"
-        ),
-        node(
-            func=evaluate_drug_classifier,
-            inputs=["drug_classifier_model", "X_train", "y_drug_train"],
             outputs=[
+                "drug_classifier_model",
+                "drug_classifier_history",
                 "drug_classifier_train_predictions",
-                "drug_classifier_train_report"
-            ],
-            name="evaluate_drug_classifier_train_node"
-        ),
-        node(
-            func=evaluate_drug_classifier,
-            inputs=["drug_classifier_model", "X_val", "y_drug_val"],
-            outputs=[
+                "drug_classifier_train_report",
                 "drug_classifier_val_predictions",
-                "drug_classifier_val_report"
+                "drug_classifier_val_report",
             ],
-            name="evaluate_drug_classifier_val_node"
+            name="train_and_evaluate_drug_classifier_node"
         ),
     ])
     
-    # Pipeline 2: ATC Classifier (drugs only - must filter out ND samples)
+    # Pipeline 2: ATC Classifier — train + evaluate in one node (drugs only)
     atc_pipeline = pipeline([
         node(
-            func=train_atc_classifier,
+            func=train_and_evaluate_atc_classifier,
             inputs=[
                 "lipinski_model",
-                "X_train_drugs_only",  # Filtered data: drugs only
-                "y_atc_train_drugs_only",  # Filtered labels: no ND class
+                "X_train_drugs_only",
+                "y_atc_train_drugs_only",
                 "X_val_drugs_only",
                 "y_atc_val_drugs_only",
-                "n_atc_classes_drugs_only"  # Number of ATC classes (excluding ND)
+                "n_atc_classes_drugs_only",
             ],
-            outputs=["atc_classifier_model", "atc_classifier_history"],
-            name="train_atc_classifier_node"
-        ),
-        node(
-            func=evaluate_atc_classifier,
-            inputs=["atc_classifier_model", "X_train_drugs_only", "y_atc_train_drugs_only"],
             outputs=[
+                "atc_classifier_model",
+                "atc_classifier_history",
                 "atc_classifier_train_predictions",
-                "atc_classifier_train_report"
-            ],
-            name="evaluate_atc_classifier_train_node"
-        ),
-        node(
-            func=evaluate_atc_classifier,
-            inputs=["atc_classifier_model", "X_val_drugs_only", "y_atc_val_drugs_only"],
-            outputs=[
+                "atc_classifier_train_report",
                 "atc_classifier_val_predictions",
-                "atc_classifier_val_report"
+                "atc_classifier_val_report",
             ],
-            name="evaluate_atc_classifier_val_node"
+            name="train_and_evaluate_atc_classifier_node"
         ),
     ])
     

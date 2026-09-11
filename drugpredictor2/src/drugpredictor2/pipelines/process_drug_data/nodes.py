@@ -44,9 +44,20 @@ def compute_fingerprints_from_smiles(smiles: str):
 # Node: process drug dataset
 # ===========================================
 
-def process_drug_dataset(drug_raw: pd.DataFrame):
+def process_drug_dataset(drug_raw: pd.DataFrame, atc_subset=None):
     """Process the drug dataset to generate features and labels."""
     df = drug_raw.copy()
+
+    # V (Various) is a heterogeneous catch-all with no coherent chemical identity.
+    v_count = (df["MATC_Code_Short"] == "V").sum()
+    df = df[df["MATC_Code_Short"] != "V"].reset_index(drop=True)
+    print(f"Removed {v_count} 'Various' (V) samples — not a meaningful pharmacological class.")
+
+    if atc_subset is not None:
+        codes = [c.strip() for c in atc_subset.split(",")]
+        before = len(df)
+        df = df[df["MATC_Code_Short"].isin(codes)].reset_index(drop=True)
+        print(f"ATC subset {codes}: kept {len(df)} of {before} samples.")
 
     # Compute fingerprints/descriptors using THE SAME function as lipinski model
     print("Computing fingerprints for all molecules (using lipinski fingerprint function)...")
@@ -61,10 +72,11 @@ def process_drug_dataset(drug_raw: pd.DataFrame):
     # Prepare feature dataframe
     drug_y_drug = df["is_drug"].values.astype(int)
 
-    # Save mapping for later use
+    # Save mapping for later use — must match le.classes_ order, since that is
+    # the order to_categorical uses for one-hot columns (not df.unique() order).
     atc_mapping = pd.DataFrame({
-        "ATC_Code": df["MATC_Code_Short"].unique(),
-        "Encoded_Label": range(len(df["MATC_Code_Short"].unique()))
+        "ATC_Code": le.classes_,
+        "Encoded_Label": range(len(le.classes_))
     })
 
     # Train/test split needed

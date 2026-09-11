@@ -77,13 +77,15 @@ def _clone_conv1d_backbone(pretrained_model, input_dim):
 # ====================================================
 def filter_drugs_only(X, y_drug, y_atc):
     """Filter dataset to keep only drug samples (is_drug=1) for ATC training.
-    
-    Removes all non-drug samples (ND class) from the dataset.
-    Also removes the ND column (class 1) from the one-hot encoded y_atc.
-    
+
+    Also drops the 'ND' (non-drug) one-hot column at index 1, but ONLY if it
+    is actually empty after row filtering. When `atc_subset` already excludes
+    ND upstream (in process_drug_dataset), index 1 is a real class and must
+    be kept — hardcoding its removal silently drops a real class.
+
     Returns:
         X_drugs: Features for drug samples only
-        y_atc_drugs: ATC labels for drug samples only (ND column removed, 16 classes instead of 17)
+        y_atc_drugs: ATC labels for drug samples only (ND column dropped if empty)
     """
     # Find indices where is_drug == 1
     drug_indices = np.where(y_drug.flatten() == 1)[0]
@@ -93,18 +95,20 @@ def filter_drugs_only(X, y_drug, y_atc):
     
     print(f"Filtered {len(drug_indices)} drug samples from {len(X)} total samples")
     print(f"Original y_atc shape: {y_atc_temp.shape}")
-    
-    # Remove ND column (index 1) from one-hot encoded y_atc
-    # ND is encoded as class 1, so we remove column 1
-    y_atc_drugs = np.delete(y_atc_temp, 1, axis=1)
-    
-    print(f"After removing ND class: {y_atc_drugs.shape}")
+
+    # Only remove column 1 if it is genuinely unused (the ND placeholder),
+    # not when it's a real class (e.g. atc_subset runs with ND already excluded).
+    if y_atc_temp.shape[1] > 1 and y_atc_temp[:, 1].sum() == 0:
+        y_atc_drugs = np.delete(y_atc_temp, 1, axis=1)
+        print(f"Removed empty ND column (index 1): {y_atc_drugs.shape}")
+    else:
+        y_atc_drugs = y_atc_temp
+        print("Column 1 has real samples — keeping all columns (no ND to remove).")
+
     print(f"Class distribution after filtering:")
     class_counts = np.sum(y_atc_drugs, axis=0)
     for i, count in enumerate(class_counts):
-        # Adjust index for display (since we removed index 1)
-        original_idx = i if i < 1 else i + 1
-        print(f"  Class {original_idx}: {int(count)} samples")
+        print(f"  Class {i}: {int(count)} samples")
     
     return X_drugs, y_atc_drugs
 
@@ -115,29 +119,24 @@ def get_num_atc_classes_drugs_only(y_atc_train_drugs_only):
 
 
 def create_atc_mapping_drugs_only(atc_mapping):
-    """Create updated ATC mapping after removing ND class.
-    
+    """Create ATC mapping matching the columns produced by filter_drugs_only.
+
+    Drops the 'ND' row only if present (full-dataset runs); for atc_subset
+    runs ND is already absent upstream, so the mapping passes through
+    unchanged. Encoded_Label is always renumbered 0..n-1 in the same sorted
+    order as the original labels, matching the one-hot column order from
+    to_categorical (and the column dropped by filter_drugs_only).
+
     Args:
         atc_mapping: Original ATC mapping DataFrame with columns [ATC_Code, Encoded_Label]
-    
+
     Returns:
-        DataFrame with updated mapping excluding ND (clean encoding 0-15)
+        DataFrame with updated mapping excluding ND (if present).
     """
-    # Remove ND from mapping
     atc_mapping_drugs = atc_mapping[atc_mapping['ATC_Code'] != 'ND'].copy()
-    
-    # Create new encoding that reflects the removal of ND (index 1)
-    new_labels = []
-    for old_label in atc_mapping_drugs['Encoded_Label']:
-        if old_label < 1:
-            # N (0) stays at 0
-            new_labels.append(old_label)
-        else:
-            # Everything after ND shifts down by 1
-            new_labels.append(old_label - 1)
-    
-    atc_mapping_drugs['Encoded_Label'] = new_labels
-    
+    atc_mapping_drugs = atc_mapping_drugs.sort_values('Encoded_Label').reset_index(drop=True)
+    atc_mapping_drugs['Encoded_Label'] = range(len(atc_mapping_drugs))
+
     return atc_mapping_drugs[['ATC_Code', 'Encoded_Label']]
 
 
