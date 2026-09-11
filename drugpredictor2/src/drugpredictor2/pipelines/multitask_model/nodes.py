@@ -78,14 +78,16 @@ def _clone_conv1d_backbone(pretrained_model, input_dim):
 def filter_drugs_only(X, y_drug, y_atc):
     """Filter dataset to keep only drug samples (is_drug=1) for ATC training.
 
-    Also drops the 'ND' (non-drug) one-hot column at index 1, but ONLY if it
-    is actually empty after row filtering. When `atc_subset` already excludes
-    ND upstream (in process_drug_dataset), index 1 is a real class and must
-    be kept — hardcoding its removal silently drops a real class.
+    Also drops any one-hot column that is entirely empty after row filtering
+    (e.g. the 'ND' non-drug placeholder, wherever it lands alphabetically).
+    Columns are located dynamically by emptiness, not by a hardcoded index —
+    'ND' is not necessarily at index 1 (e.g. it's index 11 in the full
+    16-class taxonomy). When atc_subset already excludes ND upstream, no
+    column will be empty and nothing is dropped.
 
     Returns:
         X_drugs: Features for drug samples only
-        y_atc_drugs: ATC labels for drug samples only (ND column dropped if empty)
+        y_atc_drugs: ATC labels for drug samples only (empty columns dropped)
     """
     # Find indices where is_drug == 1
     drug_indices = np.where(y_drug.flatten() == 1)[0]
@@ -96,14 +98,14 @@ def filter_drugs_only(X, y_drug, y_atc):
     print(f"Filtered {len(drug_indices)} drug samples from {len(X)} total samples")
     print(f"Original y_atc shape: {y_atc_temp.shape}")
 
-    # Only remove column 1 if it is genuinely unused (the ND placeholder),
-    # not when it's a real class (e.g. atc_subset runs with ND already excluded).
-    if y_atc_temp.shape[1] > 1 and y_atc_temp[:, 1].sum() == 0:
-        y_atc_drugs = np.delete(y_atc_temp, 1, axis=1)
-        print(f"Removed empty ND column (index 1): {y_atc_drugs.shape}")
+    # Drop whichever columns are genuinely unused after row filtering.
+    empty_cols = np.where(y_atc_temp.sum(axis=0) == 0)[0]
+    if len(empty_cols) > 0:
+        y_atc_drugs = np.delete(y_atc_temp, empty_cols, axis=1)
+        print(f"Removed empty columns at indices {empty_cols.tolist()}: {y_atc_drugs.shape}")
     else:
         y_atc_drugs = y_atc_temp
-        print("Column 1 has real samples — keeping all columns (no ND to remove).")
+        print("No empty columns found — keeping all columns.")
 
     print(f"Class distribution after filtering:")
     class_counts = np.sum(y_atc_drugs, axis=0)
