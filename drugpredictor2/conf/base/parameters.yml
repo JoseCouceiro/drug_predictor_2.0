@@ -10,6 +10,35 @@ split_params:
   val_size: 0.1
   test_size: 0.1
 
+train_params_multitask:
+  batch_size: 32  # reduced from 128 — larger batches caused an OOM kill mid-epoch
+  epochs: 200
+
+# Multi-task pretraining: RuleFive (binary) + QED + 3 structural descriptors
+# (regression), instead of RuleFive alone, to give the shared backbone a
+# richer training signal to transfer downstream.
+split_params_multitask:
+  label: 'RuleFive'          # used only for stratified train/val/test split
+  X_column: 'FP'
+  labels: ['RuleFive', 'QED', 'NumRotatableBonds', 'NumAromaticRings', 'FractionCSP3']
+  label_types:
+    RuleFive: binary
+    QED: regression
+    NumRotatableBonds: regression
+    NumAromaticRings: regression
+    FractionCSP3: regression
+  # Down-weight count-based regression heads (larger raw MSE scale) so no
+  # single head dominates the combined loss; tune after watching per-head
+  # losses in the first run.
+  loss_weights:
+    RuleFive: 1.0
+    QED: 1.0
+    NumRotatableBonds: 0.01
+    NumAromaticRings: 0.05
+    FractionCSP3: 1.0
+  val_size: 0.1
+  test_size: 0.1
+
 n_ATC_classes: 15
 
 # Fingerprint parameters

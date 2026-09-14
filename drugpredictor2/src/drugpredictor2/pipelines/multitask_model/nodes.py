@@ -21,6 +21,23 @@ for _gpu in _gpus:
 
 
 # ====================================================
+# Backbone selection — lets the pipeline switch between the single-task
+# (RuleFive-only) and multi-task (RuleFive + QED + descriptors) pretrained
+# Lipinski models via params:backbone_source, no code edits needed.
+# ====================================================
+def select_backbone(lipinski_model, lipinski_multitask_model, backbone_source: str):
+    if backbone_source == "multitask":
+        print("Using MULTI-TASK Lipinski backbone (RuleFive + QED + descriptors).")
+        return lipinski_multitask_model
+    if backbone_source == "single":
+        print("Using SINGLE-TASK Lipinski backbone (RuleFive only).")
+        return lipinski_model
+    raise ValueError(
+        f"Unknown backbone_source '{backbone_source}', expected 'single' or 'multitask'."
+    )
+
+
+# ====================================================
 # Transfer Learning Helpers
 # ====================================================
 def _clone_conv1d_backbone(pretrained_model, input_dim):

@@ -12,8 +12,8 @@ def create_pipeline(**kwargs) -> Pipeline:
         ),
         node(
             func=process_new_partitions,
-            inputs=["raw_csv_files", "existing_partitions_set"],
-            outputs="featurized_data",
+            inputs=["raw_csv_files", "existing_partitions_set", "params:featurized_data_path"],
+            outputs="featurized_data_summary",
             name="process_new_partitions_node",
         )
     ])

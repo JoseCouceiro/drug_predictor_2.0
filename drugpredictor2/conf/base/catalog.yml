@@ -12,6 +12,12 @@ featurized_data:
     type: pandas.ParquetDataSet
     filepath: dummy.parquet
 
+# Small provenance summary from the current run only (partitions processed
+# in memory are written straight to disk now — see process_new_partitions).
+featurized_data_summary:
+  type: json.JSONDataSet
+  filepath: data/08_reporting/featurized_data_summary.json
+
 # ================================
 # Lipinski model outputs
 # ================================
@@ -46,6 +52,35 @@ lipinski_val_predictions:
 lipinski_val_report:
   type: text.TextDataSet
   filepath: data/08_reporting/lipinski_val_report.txt
+
+# ================================
+# Lipinski MULTI-TASK model outputs (RuleFive + QED + descriptors)
+# ================================
+
+lipinski_multitask_model:
+  type: pickle.PickleDataSet
+  filepath: data/06_models/lipinski_multitask_model.pkl
+  backend: pickle
+
+lipinski_multitask_training_history:
+  type: json.JSONDataSet
+  filepath: data/08_reporting/lipinski_multitask_training_history.json
+
+lipinski_multitask_train_predictions:
+  type: pandas.CSVDataSet
+  filepath: data/07_model_output/lipinski_multitask_train_predictions.csv
+
+lipinski_multitask_train_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/lipinski_multitask_train_report.txt
+
+lipinski_multitask_val_predictions:
+  type: pandas.CSVDataSet
+  filepath: data/07_model_output/lipinski_multitask_val_predictions.csv
+
+lipinski_multitask_val_report:
+  type: text.TextDataSet
+  filepath: data/08_reporting/lipinski_multitask_val_report.txt
 
 # ================================
 # Multitask model outputs

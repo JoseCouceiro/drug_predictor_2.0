@@ -57,10 +57,7 @@ transfer better than training a small classifier from scratch on a much smaller 
    ~94 (`H`) to ~2,589 (`J`), a >27x imbalance.
 3. **Small dataset relative to class count.** ~9,600 molecules spread over 15 classes
    leaves some classes with only a few dozen validation examples.
-4. **Structure-only features.** The model only sees molecular fingerprints/descriptors —
-   no biological/target/pathway information — which caps how much of the label signal
-   is recoverable at all.
-5. **GPU memory constraints** repeatedly forced smaller batch sizes/architectures during
+4. **GPU memory constraints** repeatedly forced smaller batch sizes/architectures during
    development (`ResourceExhaustedError` on the training GPU), limiting how large a head
    could be explored.
 

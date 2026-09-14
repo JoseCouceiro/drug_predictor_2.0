@@ -3,3 +3,8 @@
 #
 # Documentation for this file format can be found in "Parameters"
 # Link: https://docs.kedro.org/en/0.18.10/kedro_project_setup/configuration.html#parameters
+
+# Which pretrained Lipinski backbone to transfer from:
+#   "single"    -> lipinski_model (RuleFive-only pretraining)
+#   "multitask" -> lipinski_multitask_model (RuleFive + QED + descriptors pretraining)
+backbone_source: "single"

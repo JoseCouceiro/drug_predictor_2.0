@@ -1,5 +1,6 @@
 from kedro.pipeline import Pipeline, node, pipeline
 from .nodes import (
+    select_backbone,
     filter_drugs_only,
     get_num_atc_classes_drugs_only,
     create_atc_mapping_drugs_only,
@@ -13,7 +14,18 @@ def create_pipeline(**kwargs) -> Pipeline:
     1. Drug classifier: binary drug vs non-drug (uses all data)
     2. ATC classifier: multiclass ATC classification (uses drug data only)
     """
-    
+
+    # Pick which pretrained Lipinski backbone to transfer from
+    # (params:backbone_source = "single" or "multitask")
+    backbone_pipeline = pipeline([
+        node(
+            func=select_backbone,
+            inputs=["lipinski_model", "lipinski_multitask_model", "params:backbone_source"],
+            outputs="selected_lipinski_backbone",
+            name="select_backbone_node"
+        ),
+    ])
+
     # Data preparation: Filter drugs for ATC classifier
     data_prep_pipeline = pipeline([
         node(
@@ -47,7 +59,7 @@ def create_pipeline(**kwargs) -> Pipeline:
         node(
             func=train_and_evaluate_drug_classifier,
             inputs=[
-                "lipinski_model",
+                "selected_lipinski_backbone",
                 "X_train",
                 "y_drug_train",
                 "X_val",
@@ -70,7 +82,7 @@ def create_pipeline(**kwargs) -> Pipeline:
         node(
             func=train_and_evaluate_atc_classifier,
             inputs=[
-                "lipinski_model",
+                "selected_lipinski_backbone",
                 "X_train_drugs_only",
                 "y_atc_train_drugs_only",
                 "X_val_drugs_only",
@@ -90,4 +102,4 @@ def create_pipeline(**kwargs) -> Pipeline:
     ])
     
     # Combine all pipelines
-    return data_prep_pipeline + drug_pipeline + atc_pipeline
+    return backbone_pipeline + data_prep_pipeline + drug_pipeline + atc_pipeline

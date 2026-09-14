@@ -1,4 +1,5 @@
 import math
+import gc
 import numpy as np
 import pandas as pd
 from typing import Dict, Callable, Iterator, Optional, Tuple, List
@@ -362,6 +363,325 @@ def train_model_on_partitions(
         history.history,
         test_predictions,
         test_report,
+        val_predictions,
+        val_report,
+    )
+
+
+# ============================================================
+# Multi-task pretraining: RuleFive + QED + structural descriptors
+# ============================================================
+# Additive alongside the single-label pipeline above (nothing existing is
+# changed) so both backbones can be compared head-to-head.
+
+def _discover_valid_rows_multitask(
+    partition_loaders: Dict[str, Callable[[], pd.DataFrame]], params: dict
+):
+    """Like _discover_valid_rows, but a row is only 'valid' if the fingerprint
+    AND every auxiliary label column are present. Stratification still uses
+    the primary binary label (params['label']) since stratifying jointly on
+    several continuous targets isn't meaningful."""
+    x_col = params["X_column"]
+    label_cols = params["labels"]
+    primary_label = params["label"]
+
+    primary_labels = []
+    keep_masks = []
+    for load in partition_loaders.values():
+        df = load()
+        primary_labels.append(df[primary_label])
+        keep = df[x_col].notna()
+        for col in label_cols:
+            keep = keep & df[col].notna()
+        keep_masks.append(keep)
+
+    primary_labels = pd.concat(primary_labels, ignore_index=True)
+    keep = pd.concat(keep_masks, ignore_index=True)
+
+    valid_idx = np.flatnonzero(keep.values)
+    valid_labels = primary_labels.iloc[valid_idx].reset_index(drop=True)
+    return valid_idx, valid_labels
+
+
+def create_train_val_test_indices_multitask(
+    partitioned_model_input: Dict[str, Callable[[], pd.DataFrame]],
+    params: dict,
+) -> Tuple[List[int], List[int], List[int]]:
+    """Same stratified-split logic as create_train_val_test_indices, but the
+    keep-mask additionally requires every auxiliary label column to be present."""
+    val_size = params["val_size"]
+    test_size = params["test_size"]
+
+    valid_idx, valid_labels = _discover_valid_rows_multitask(partitioned_model_input, params)
+    print(valid_labels.value_counts())
+
+    train_val_idx, test_idx = train_test_split(
+        valid_idx, test_size=test_size, stratify=valid_labels, random_state=25,
+    )
+
+    pos_in_valid = np.searchsorted(valid_idx, np.sort(train_val_idx))
+    remain_labels = valid_labels.iloc[pos_in_valid]
+
+    rel_val = val_size / (1.0 - test_size)
+    train_idx, val_idx = train_test_split(
+        train_val_idx, test_size=rel_val, stratify=remain_labels, random_state=42,
+    )
+
+    train_idx = sorted(train_idx.tolist())
+    val_idx = sorted(val_idx.tolist())
+    test_idx = sorted(test_idx.tolist())
+
+    print(f"Dataset split (valid rows only): Train={len(train_idx)}, Val={len(val_idx)}, Test={len(test_idx)}")
+    return train_idx, val_idx, test_idx
+
+
+def _build_multitask_batch(df: pd.DataFrame, x_col: str, label_cols: List[str]):
+    X = np.stack(df[x_col].to_numpy()).astype(np.float32)
+    X = X.reshape((X.shape[0], X.shape[1], 1))
+    y = {col: df[col].to_numpy().astype(np.float32) for col in label_cols}
+    return X, y
+
+
+def infinite_train_generator_multitask(
+    partition_loaders: Dict[str, Callable[[], pd.DataFrame]],
+    ordered_indices: List[int],
+    params: Dict[str, str],
+    batch_size: int,
+    shuffle_each_epoch: bool = False,
+    seed: Optional[int] = None,
+):
+    """Same traversal logic as infinite_train_generator, but yields a dict of
+    label arrays (one per auxiliary target) instead of a single array."""
+    x_col, label_cols = params["X_column"], params["labels"]
+    spans = _partition_spans(partition_loaders)
+    base_order = np.array(ordered_indices, dtype=int)
+    rng = np.random.default_rng(seed) if shuffle_each_epoch else None
+
+    while True:
+        order = base_order.copy()
+        if rng is not None:
+            rng.shuffle(order)
+
+        for (name, start, end) in spans:
+            mask = (order >= start) & (order < end)
+            part_global = order[mask]
+            if part_global.size == 0:
+                continue
+
+            local = np.sort(part_global - start)
+            df = partition_loaders[name]()
+            df = df.iloc[local]
+            df = load_and_preprocess_fingerprints(df, params)
+            if df.empty:
+                continue
+
+            for i in range(0, len(df), batch_size):
+                yield _build_multitask_batch(df.iloc[i:i+batch_size], x_col, label_cols)
+
+            # Release this partition's ~200MB+ DataFrame before loading the
+            # next one — relying on lazy GC across a long fit() loop is what
+            # caused memory to climb until the process was OOM-killed.
+            del df
+            gc.collect()
+
+
+def repeating_eval_generator_multitask(
+    partition_loaders: Dict[str, Callable[[], pd.DataFrame]],
+    ordered_indices: List[int],
+    params: Dict[str, str],
+    batch_size: int,
+):
+    x_col, label_cols = params["X_column"], params["labels"]
+    spans = _partition_spans(partition_loaders)
+    order = np.array(ordered_indices, dtype=int)
+
+    while True:
+        for (name, start, end) in spans:
+            mask = (order >= start) & (order < end)
+            part_global = order[mask]
+            if part_global.size == 0:
+                continue
+
+            local = np.sort(part_global - start)
+            df = partition_loaders[name]()
+            df = df.iloc[local]
+            df = load_and_preprocess_fingerprints(df, params)
+            if df.empty:
+                continue
+
+            for i in range(0, len(df), batch_size):
+                yield _build_multitask_batch(df.iloc[i:i+batch_size], x_col, label_cols)
+
+            del df
+            gc.collect()
+
+
+def build_multitask_model(hp: HyperParameters, input_shape: tuple, output_specs: List[Dict]) -> keras.Model:
+    """Shared Conv1D backbone with one head per auxiliary target.
+
+    output_specs: list of {"name": str, "type": "binary" | "regression", "loss_weight": float}.
+    Binary heads use sigmoid + BCE; regression heads use a linear output + MSE.
+    The backbone (Input -> Conv1D -> Flatten) has the same shape as
+    build_def_model_dynamic's, so `_clone_conv1d_backbone` in
+    multitask_model/nodes.py keeps working unchanged — it only looks for the
+    first Conv1D/Flatten layers, regardless of what follows.
+    """
+    inputs = layers.Input(shape=input_shape, dtype="float32", name="fp_input")
+
+    x = layers.Conv1D(
+        filters=hp.Int('conv_filters', 32, 128, step=16),
+        kernel_size=hp.Choice('conv_kernel', [3, 5]),
+        activation='relu',
+        padding='valid',
+    )(inputs)
+    x = layers.Flatten()(x)
+
+    x = layers.Dense(
+        units=hp.Int('dense_1_units', 256, 512, step=64),
+        activation='relu',
+        kernel_initializer='he_uniform',
+    )(x)
+    x = layers.Dropout(hp.Float('dropout_1', 0.3, 0.5, step=0.05))(x)
+
+    shared = layers.Dense(
+        units=hp.Int('dense_2_units', 128, 256, step=32),
+        activation='relu',
+        kernel_initializer='he_uniform',
+    )(x)
+    shared = layers.Dropout(hp.Float('dropout_2', 0.3, 0.5, step=0.05))(shared)
+
+    outputs, losses, loss_weights, metrics_dict = {}, {}, {}, {}
+    for spec in output_specs:
+        name = spec["name"]
+        head = layers.Dense(32, activation='relu', name=f"{name}_head_dense")(shared)
+        if spec["type"] == "binary":
+            outputs[name] = layers.Dense(1, activation='sigmoid', name=name)(head)
+            losses[name] = 'binary_crossentropy'
+            metrics_dict[name] = ['accuracy']
+        else:
+            outputs[name] = layers.Dense(1, activation='linear', name=name)(head)
+            losses[name] = 'mse'
+            metrics_dict[name] = ['mae']
+        loss_weights[name] = spec.get("loss_weight", 1.0)
+
+    model = models.Model(inputs=inputs, outputs=outputs)
+    model.compile(
+        optimizer=optimizers.Adam(learning_rate=hp.Choice('learning_rate', [1e-3, 5e-4])),
+        loss=losses,
+        loss_weights=loss_weights,
+        metrics=metrics_dict,
+    )
+    return model
+
+
+def train_multitask_model_on_partitions(
+    partitioned_model_input: Dict[str, Callable[[], pd.DataFrame]],
+    train_params: dict,
+    split_params: dict,
+):
+    """Train the Lipinski backbone with several auxiliary heads at once
+    (RuleFive + QED + NumRotatableBonds + NumAromaticRings + FractionCSP3)
+    instead of a single binary label, so the backbone learns a richer
+    structural representation to transfer to the downstream drug/ATC heads.
+
+    Expects split_params: {X_column, label, labels, label_types, loss_weights (optional),
+                            val_size, test_size}
+            train_params: {epochs, batch_size}
+    """
+    batch_size = train_params['batch_size']
+    label_cols = split_params["labels"]
+    label_types = split_params["label_types"]
+    loss_weights = split_params.get("loss_weights", {})
+    output_specs = [
+        {"name": c, "type": label_types[c], "loss_weight": loss_weights.get(c, 1.0)}
+        for c in label_cols
+    ]
+
+    train_idx, val_idx, test_idx = create_train_val_test_indices_multitask(
+        partitioned_model_input, split_params
+    )
+
+    train_gen = infinite_train_generator_multitask(
+        partitioned_model_input, train_idx, split_params, batch_size, shuffle_each_epoch=True
+    )
+    val_gen = repeating_eval_generator_multitask(
+        partitioned_model_input, val_idx, split_params, batch_size
+    )
+
+    steps_per_epoch = math.ceil(len(train_idx) / batch_size)
+    validation_steps = math.ceil(len(val_idx) / batch_size)
+
+    sample_X, _ = next(train_gen)
+    in_shape = sample_X.shape[1:]
+    hp = HyperParameters()
+    model = build_multitask_model(hp, in_shape, output_specs)
+
+    history = model.fit(
+        train_gen,
+        epochs=train_params['epochs'],
+        steps_per_epoch=steps_per_epoch,
+        validation_data=val_gen,
+        validation_steps=validation_steps,
+        callbacks=[keras.callbacks.EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)],
+        verbose=1,
+    )
+
+    def _materialize(gen, steps):
+        Xb = []
+        yb = {c: [] for c in label_cols}
+        for _ in range(steps):
+            try:
+                X, y = next(gen)
+            except StopIteration:
+                break
+            Xb.append(X)
+            for c in label_cols:
+                yb[c].append(y[c])
+        Xall = np.concatenate(Xb, axis=0) if Xb else np.empty((0,) + in_shape, dtype=np.float32)
+        yall = {c: (np.concatenate(v, axis=0) if v else np.empty((0,), dtype=np.float32)) for c, v in yb.items()}
+        return Xall, yall
+
+    def _report(X, y_dict):
+        preds = model.predict(X, verbose=0)
+        if not isinstance(preds, dict):
+            preds = {name: preds[i] for i, name in enumerate(label_cols)}
+
+        report_lines, pred_cols = [], {}
+        for c in label_cols:
+            n = min(len(y_dict[c]), len(preds[c]))
+            y_true = y_dict[c][:n]
+            y_pred_raw = np.asarray(preds[c])[:n].ravel()
+            pred_cols[f"{c}_true"] = y_true
+            if label_types[c] == "binary":
+                y_pred = (y_pred_raw > 0.5).astype(int)
+                pred_cols[f"{c}_pred"] = y_pred
+                report_lines.append(f"--- {c} (binary) ---")
+                report_lines.append(metrics.classification_report(y_true, y_pred))
+            else:
+                pred_cols[f"{c}_pred"] = y_pred_raw
+                mae = metrics.mean_absolute_error(y_true, y_pred_raw)
+                r2 = metrics.r2_score(y_true, y_pred_raw)
+                report_lines.append(f"--- {c} (regression) --- MAE={mae:.4f}  R2={r2:.4f}")
+        return pd.DataFrame(pred_cols), "\n".join(report_lines)
+
+    val_gen_eval = repeating_eval_generator_multitask(partitioned_model_input, val_idx, split_params, batch_size)
+    Xv, yv = _materialize(val_gen_eval, validation_steps)
+    val_predictions, val_report = _report(Xv, yv)
+
+    # Use the small held-out test_idx (~10%) for the second report, NOT the
+    # full training set — materializing all of train_idx (~80% of ~277k rows,
+    # ~5-6 GB of fingerprint arrays) previously caused an OOM kill. This
+    # mirrors train_model_on_partitions' original pattern.
+    test_steps = math.ceil(len(test_idx) / batch_size)
+    train_gen_eval = repeating_eval_generator_multitask(partitioned_model_input, test_idx, split_params, batch_size)
+    Xt, yt = _materialize(train_gen_eval, test_steps)
+    train_predictions, train_report = _report(Xt, yt)
+
+    return (
+        model,
+        history.history,
+        train_predictions,
+        train_report,
         val_predictions,
         val_report,
     )
