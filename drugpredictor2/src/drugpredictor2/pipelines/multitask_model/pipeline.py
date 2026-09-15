@@ -100,6 +100,68 @@ def create_pipeline(**kwargs) -> Pipeline:
             name="train_and_evaluate_atc_classifier_node"
         ),
     ])
-    
+
+    # Action-based and organ-based ATC branches — both taxonomies trained and
+    # evaluated in the same run (against the same selected_lipinski_backbone)
+    # for direct side-by-side comparison, reusing process_drug_data's
+    # action_/organ_ prefixed datasets.
+    def _taxonomy_atc_branch(prefix: str) -> Pipeline:
+        return pipeline([
+            node(
+                func=filter_drugs_only,
+                inputs=[f"{prefix}X_train", f"{prefix}y_drug_train", f"{prefix}y_atc_train"],
+                outputs=[f"{prefix}X_train_drugs_only", f"{prefix}y_atc_train_drugs_only"],
+                name=f"filter_train_drugs_{prefix}node"
+            ),
+            node(
+                func=filter_drugs_only,
+                inputs=[f"{prefix}X_val", f"{prefix}y_drug_val", f"{prefix}y_atc_val"],
+                outputs=[f"{prefix}X_val_drugs_only", f"{prefix}y_atc_val_drugs_only"],
+                name=f"filter_val_drugs_{prefix}node"
+            ),
+            node(
+                func=get_num_atc_classes_drugs_only,
+                inputs=[f"{prefix}y_atc_train_drugs_only"],
+                outputs=f"{prefix}n_atc_classes_drugs_only",
+                name=f"get_num_atc_classes_{prefix}node"
+            ),
+            node(
+                func=create_atc_mapping_drugs_only,
+                inputs=[f"{prefix}atc_mapping"],
+                outputs=f"{prefix}atc_mapping_drugs_only",
+                name=f"create_atc_mapping_drugs_only_{prefix}node"
+            ),
+            node(
+                func=train_and_evaluate_atc_classifier,
+                inputs=[
+                    "selected_lipinski_backbone",
+                    f"{prefix}X_train_drugs_only",
+                    f"{prefix}y_atc_train_drugs_only",
+                    f"{prefix}X_val_drugs_only",
+                    f"{prefix}y_atc_val_drugs_only",
+                    f"{prefix}n_atc_classes_drugs_only",
+                ],
+                outputs=[
+                    f"{prefix}atc_classifier_model",
+                    f"{prefix}atc_classifier_history",
+                    f"{prefix}atc_classifier_train_predictions",
+                    f"{prefix}atc_classifier_train_report",
+                    f"{prefix}atc_classifier_val_predictions",
+                    f"{prefix}atc_classifier_val_report",
+                ],
+                name=f"train_and_evaluate_atc_classifier_{prefix}node"
+            ),
+        ])
+
+    action_atc_pipeline = _taxonomy_atc_branch("action_")
+    organ_atc_pipeline = _taxonomy_atc_branch("organ_")
+
     # Combine all pipelines
-    return backbone_pipeline + data_prep_pipeline + drug_pipeline + atc_pipeline
+    return (
+        backbone_pipeline
+        + data_prep_pipeline
+        + drug_pipeline
+        + atc_pipeline
+        + action_atc_pipeline
+        + organ_atc_pipeline
+    )

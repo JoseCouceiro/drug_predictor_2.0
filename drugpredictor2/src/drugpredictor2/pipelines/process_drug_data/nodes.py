@@ -84,6 +84,25 @@ def process_drug_dataset(drug_raw: pd.DataFrame, atc_subset=None):
 
     return X, drug_y_drug, y_atc, atc_mapping
 
+
+# ATC codes grouped by their natural taxonomy axis (see README experiment):
+# action-based = grouped by pharmacological mechanism, organ-based = grouped
+# by anatomical target. Used by the two wrapper functions below so both
+# taxonomies can be processed in the same pipeline run for direct comparison.
+ACTION_BASED_CODES = "J,L,B,A,P,H"
+ORGAN_BASED_CODES = "N,C,R,D,G,S,M,O,I"
+
+
+def process_drug_dataset_action(drug_raw: pd.DataFrame):
+    """Same as process_drug_dataset, fixed to the action-based ATC subset."""
+    return process_drug_dataset(drug_raw, ACTION_BASED_CODES)
+
+
+def process_drug_dataset_organ(drug_raw: pd.DataFrame):
+    """Same as process_drug_dataset, fixed to the organ-based ATC subset."""
+    return process_drug_dataset(drug_raw, ORGAN_BASED_CODES)
+
+
 def split_drug_data(X, y_drug, y_atc, test_size=0.2, random_state=42):
     """Split data into train and validation sets."""
     indices = np.arange(len(X))
