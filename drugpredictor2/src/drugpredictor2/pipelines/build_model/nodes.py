@@ -1,5 +1,8 @@
 import math
 import gc
+import os
+import shutil
+import tempfile
 import numpy as np
 import pandas as pd
 from typing import Dict, Callable, Iterator, Optional, Tuple, List
@@ -616,15 +619,36 @@ def train_multitask_model_on_partitions(
     hp = HyperParameters()
     model = build_multitask_model(hp, in_shape, output_specs)
 
+    # Checkpoint the best epoch to DISK instead of EarlyStopping's
+    # restore_best_weights=True, which keeps an extra full in-memory copy of
+    # all weights alive for the whole run. That extra copy — created right at
+    # on_epoch_end, exactly when training buffers/validation results are also
+    # all resident at once — is what pushed memory over the edge and got the
+    # process OOM-killed right after a fully successful first epoch.
+    checkpoint_dir = tempfile.mkdtemp(prefix="lipinski_multitask_ckpt_")
+    checkpoint_path = os.path.join(checkpoint_dir, "best.weights.h5")
+
     history = model.fit(
         train_gen,
         epochs=train_params['epochs'],
         steps_per_epoch=steps_per_epoch,
         validation_data=val_gen,
         validation_steps=validation_steps,
-        callbacks=[keras.callbacks.EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)],
+        callbacks=[
+            keras.callbacks.EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=False),
+            keras.callbacks.ModelCheckpoint(
+                filepath=checkpoint_path, monitor="val_loss",
+                save_best_only=True, save_weights_only=True, verbose=0,
+            ),
+        ],
         verbose=1,
     )
+
+    # Load the best epoch's weights back in one shot, now that training is
+    # done and the generators/buffers that were competing for memory are gone.
+    if os.path.exists(checkpoint_path):
+        model.load_weights(checkpoint_path)
+    shutil.rmtree(checkpoint_dir, ignore_errors=True)
 
     def _materialize(gen, steps):
         Xb = []

@@ -11,7 +11,7 @@ split_params:
   test_size: 0.1
 
 train_params_multitask:
-  batch_size: 32  # reduced from 128 — larger batches caused an OOM kill mid-epoch
+  batch_size: 16  # further reduced from 32 — same OOM kill recurred at 32
   epochs: 200
 
 # Multi-task pretraining: RuleFive (binary) + QED + 3 structural descriptors

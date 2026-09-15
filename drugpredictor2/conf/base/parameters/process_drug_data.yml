@@ -8,4 +8,4 @@
 # Use null to include all available codes (minus V which is always excluded).
 # action_based: "J,L,B,A,P,H"
 # organ_based:  "N,C,R,D,G,S,M,O,I"
-atc_subset: null
+atc_subset: "J,L,B,A,P,H"

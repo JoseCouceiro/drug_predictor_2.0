@@ -7,4 +7,4 @@
 # Which pretrained Lipinski backbone to transfer from:
 #   "single"    -> lipinski_model (RuleFive-only pretraining)
 #   "multitask" -> lipinski_multitask_model (RuleFive + QED + descriptors pretraining)
-backbone_source: "single"
+backbone_source: "multitask"

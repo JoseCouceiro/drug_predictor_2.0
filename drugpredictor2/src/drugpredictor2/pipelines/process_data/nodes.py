@@ -28,31 +28,33 @@ def featurize_molecule(mol,
 
     if mol is None:
         total_len = morgan_bits + morgan_feat_bits + MAACS_bits + ap_bits + tt_bits + tapsa_weight
-        return np.zeros(total_len, dtype=float)
+        # float32, not float16: PyArrow/Parquet can't serialize half-precision
+        # floats ("Unhandled type for Arrow to Parquet schema conversion: halffloat").
+        return np.zeros(total_len, dtype=np.float32)
 
     # Morgan ECFP
     morgan_fp = AllChem.GetMorganFingerprintAsBitVect(mol, morgan_radius, nBits=morgan_bits, useFeatures=False)
-    morgan_arr = np.array(morgan_fp, dtype=float)
+    morgan_arr = np.array(morgan_fp, dtype=np.float32)
 
     # Feature-based Morgan (FCFP-like)
     morgan_feat_fp = AllChem.GetMorganFingerprintAsBitVect(mol, morgan_radius, nBits=morgan_feat_bits, useFeatures=True)
-    morgan_feat_arr = np.array(morgan_feat_fp, dtype=float)
+    morgan_feat_arr = np.array(morgan_feat_fp, dtype=np.float32)
 
     # MACCS
     maccs_fp = MACCSkeys.GenMACCSKeys(mol)
-    maccs_arr = np.array(maccs_fp, dtype=float)
+    maccs_arr = np.array(maccs_fp, dtype=np.float32)
 
     # Hashed Atom Pair
     ap_fp = rdMolDescriptors.GetHashedAtomPairFingerprintAsBitVect(mol, nBits=ap_bits)
-    ap_arr = np.array(ap_fp, dtype=float)
+    ap_arr = np.array(ap_fp, dtype=np.float32)
 
     # Hashed Topological Torsion
     tt_fp = rdMolDescriptors.GetHashedTopologicalTorsionFingerprintAsBitVect(mol, nBits=tt_bits)
-    tt_arr = np.array(tt_fp, dtype=float)
+    tt_arr = np.array(tt_fp, dtype=np.float32)
 
     # TPSA
     tpsa = rdMolDescriptors.CalcTPSA(mol)
-    tpsa_arr = np.array([tpsa], dtype=float)
+    tpsa_arr = np.array([tpsa], dtype=np.float32)
 
     # Concatenate everything
     return np.concatenate([morgan_arr, morgan_feat_arr, maccs_arr, ap_arr, tt_arr, tpsa_arr])
