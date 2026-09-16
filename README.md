@@ -91,32 +91,44 @@ natural taxonomy axis — **action-based** vs. **organ-based** — makes the lab
 more learnable from structure alone, and whether the multi-task Lipinski backbone
 (section 1b) compounds that improvement.
 
+> **Note:** this dataset repurposes the letters 'I' and 'O' for its own categories
+> (`I` = "Antiinflammatory", `O` = "Lipid regulation" — verified against
+> `drug_raw['MATC_Code_Explanation']`), not the standard WHO ATC meanings. Both are
+> mechanism/action categories, not anatomical ones. An earlier version of this split
+> put them in the organ-based group (and misplaced `A`/`B`, two genuine anatomical
+> categories, in the action-based group) purely because of a wrong assumption from
+> their letters. The table below reflects the corrected split, based on each code's
+> actual meaning in this dataset:
+> - **Action-based** (mechanism): `H, I, J, L, O, P`
+> - **Organ-based** (anatomical): `A, B, C, D, G, M, N, R, S`
+
 | Configuration | Classes | Samples | Accuracy | Macro-F1 | Weighted-F1 |
 |---|---|---|---|---|---|
 | Full taxonomy + single-task backbone | 15 | 9,649 | 0.7425 | 0.6213 | 0.7475 |
 | Full taxonomy + multi-task backbone | 15 | 9,649 | 0.7399 | 0.6278 | 0.7426 |
-| Organ-based + single-task backbone | 9 | 4,220 | 0.7595 | 0.7057 | 0.7612 |
-| **Organ-based + multi-task backbone** | 9 | 4,220 | 0.7524 | 0.6961 | 0.7559 |
-| Action-based + single-task backbone | 6 | 5,429 | 0.8287 | 0.7522 | 0.8336 |
-| **Action-based + multi-task backbone** | 6 | 5,429 | **0.8370** | **0.7658** | **0.8412** |
+| Organ-based + single-task backbone | 9 | 4,975 | 0.7266 | 0.6732 | 0.7370 |
+| **Organ-based + multi-task backbone** | 9 | 4,975 | 0.7347 | 0.6728 | 0.7348 |
+| Action-based + single-task backbone | 6 | 4,674 | 0.8727 | 0.7841 | 0.8815 |
+| **Action-based + multi-task backbone** | 6 | 4,674 | **0.8695** | **0.7842** | **0.8797** |
 
 ### Conclusion
 
 Both taxonomy subsets clearly outperform the mixed full taxonomy, confirming that the
 organ/action mix was diluting the learnable signal. Between the two, **action-based
-classification is more learnable from molecular structure than organ-based
-classification**: a drug's *mechanism of action* (anti-infective, analgesic, hormonal,
-etc.) is far more tied to its chemical structure than *which organ system* it's
-routed to, which depends on pharmacokinetics/physiology that structure alone doesn't
-fully determine.
+classification is substantially more learnable from molecular structure than
+organ-based classification** (macro-F1 ~0.78 vs. ~0.67): a drug's *mechanism of
+action* (anti-infective, analgesic, hormonal, anti-inflammatory, etc.) is far more
+tied to its chemical structure than *which organ system* it's routed to, which
+depends on pharmacokinetics/physiology that structure alone doesn't fully determine.
 
-The multi-task backbone (section 1b) then adds a further, smaller improvement on top
-of the action-based split (macro-F1 0.7522 → 0.7658), and a similar small improvement
-on the full taxonomy (0.6213 → 0.6278). It doesn't help the organ-based split, which
-sits about the same either way. Overall: **restructuring the label taxonomy to match
-what the input features can actually predict was by far the bigger lever**, and the
-richer multi-task pretraining objective is a smaller, mostly-additive improvement on
-top of it.
+Unlike the full taxonomy (where the multi-task backbone gives a small but real bump,
+0.6213 → 0.6278 macro-F1), the multi-task backbone makes essentially no difference
+for either the action-based or organ-based split once the taxonomy itself is
+correct (differences are within normal training-run variance). Overall:
+**restructuring the label taxonomy to match what the input features can actually
+predict was by far the bigger lever** — getting that split right (both in which
+codes go where, and in the actual per-code meaning behind this dataset's ATC
+letters) mattered far more than which pretrained backbone was used.
 
 ## How to run
 
@@ -127,8 +139,18 @@ run without touching either parameter:
 - `atc_subset` (in `conf/base/parameters/process_drug_data.yml`) — which ATC codes
   the **default** drug/ATC pipeline branch trains on:
   - `null` → global/full 15-class taxonomy
-  - `"J,L,B,A,P,H"` → action-based subset (6 classes)
-  - `"N,C,R,D,G,S,M,O,I"` → organ-based subset (9 classes)
+  - `"H,I,J,L,O,P"` → action-based subset (6 classes)
+  - `"A,B,C,D,G,M,N,R,S"` → organ-based subset (9 classes)
+
+  > **Pitfall:** this parameter must be `null` for the default branch's numbers
+  > to mean anything for the drug/no-drug classifier. Any ATC subset excludes
+  > `ND` (non-drug) rows entirely, since `ND` isn't an ATC code — leaving
+  > `y_drug_train` 100% positive with no negative examples to learn from. This
+  > happened once during development (`atc_subset` left set to the action-based
+  > codes from an earlier experiment) and silently collapsed the drug
+  > classifier to predicting ~the same probability for every molecule. Always
+  > confirm it's `null` before training/retraining `drug_classifier_model` or
+  > the default (non-prefixed) `atc_classifier_model`.
 - `backbone_source` (in `conf/base/parameters/multitask_model.yml`) — which pretrained
   Lipinski backbone the drug/ATC classifiers transfer from:
   - `"single"` → RuleFive-only pretraining
@@ -150,7 +172,7 @@ kedro run --pipeline process_drug_data --params atc_subset:null
 kedro run --pipeline multitask_model
 ```
 
-**Action-based** subset — edit `atc_subset: "J,L,B,A,P,H"` in
+**Action-based** subset — edit `atc_subset: "H,I,J,L,O,P"` in
 `conf/base/parameters/process_drug_data.yml` (a comma-containing value can't be
 passed via `--params`, since Kedro splits that flag on commas), then:
 ```bash
@@ -159,7 +181,7 @@ kedro run --pipeline multitask_model
 ```
 
 **Organ-based** subset: same as above, with
-`atc_subset: "N,C,R,D,G,S,M,O,I"` in the YAML file.
+`atc_subset: "A,B,C,D,G,M,N,R,S"` in the YAML file.
 
 **Choosing the backbone** for whichever branch you just ran: edit
 `backbone_source` in `conf/base/parameters/multitask_model.yml` to `"single"` or
@@ -186,9 +208,29 @@ This produces, in a single pair of runs:
 All three branches (default/action/organ) train against the same selected backbone,
 so the comparison in the table above is a fair, like-for-like one.
 
+## Demo app
+
+A Streamlit app (`drugpredictor2/apps/drug_predictor/`) wraps the three trained
+classifiers (`drug_classifier_model`, `action_atc_classifier_model`,
+`organ_atc_classifier_model`) for interactive use — enter a PubChem CID or a
+SMILES string and get the drug-likeness probability plus top-3 action-based and
+organ-based ATC class predictions (top-3, not just the argmax, since a single
+molecule can legitimately straddle multiple real-world ATC codes). It also
+supports batch prediction from a CSV of CIDs/SMILES. Run it with:
+
+```bash
+cd drugpredictor2/apps/drug_predictor
+streamlit run drug_predictor.py
+```
+
+First load takes about a minute (three Keras models loaded from disk); models
+are cached in memory afterwards via `st.cache_resource`, so subsequent
+interactions are instant.
+
 ## Tech stack
 
 - **Kedro** — pipeline orchestration (`process_drug_data`, `build_model` /lipinski,
   `multitask_model`)
 - **RDKit** — molecular featurization (fingerprints, descriptors)
 - **TensorFlow / Keras** — Conv1D transfer-learning backbone + task-specific dense heads
+- **Streamlit** — interactive demo app for the trained classifiers

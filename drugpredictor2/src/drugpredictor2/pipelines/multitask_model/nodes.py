@@ -170,8 +170,16 @@ def build_drug_classifier(pretrained_model, input_dim: int):
     """
     input_layer, x = _clone_conv1d_backbone(pretrained_model, input_dim)
 
-    # First Dense is the bottleneck on the large flattened Conv1D output; keep
-    # it at 512 to avoid OOM (402k-unit flatten × 1024 ≈ 1.6 GB of weights).
+    # NOTE: an earlier version pooled here (GlobalAveragePooling1D) on the
+    # theory that the 86.6M-parameter Dense(512) fan-in was too large to
+    # train. That was the wrong diagnosis — the real bug was upstream
+    # (atc_subset leaking into the default data-prep branch stripped out all
+    # non-drug rows, so y_drug_train was 100% positive with nothing to learn
+    # from at ANY fan-in size). With that fixed, pooling actively hurt this
+    # model (val macro F1 0.52, barely above chance) by averaging away each
+    # fingerprint bit's positional identity — unlike an image/sequence, bit
+    # N here always means the same substructure, so position matters. Keep
+    # the full Flatten, same as the ATC classifier (which trains well).
     x = layers.Dense(512, activation="relu",
                      name="drug_dense_1")(x)
     x = layers.BatchNormalization(name="drug_bn_1")(x)

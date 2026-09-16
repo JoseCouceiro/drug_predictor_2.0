@@ -89,8 +89,30 @@ def process_drug_dataset(drug_raw: pd.DataFrame, atc_subset=None):
 # action-based = grouped by pharmacological mechanism, organ-based = grouped
 # by anatomical target. Used by the two wrapper functions below so both
 # taxonomies can be processed in the same pipeline run for direct comparison.
-ACTION_BASED_CODES = "J,L,B,A,P,H"
-ORGAN_BASED_CODES = "N,C,R,D,G,S,M,O,I"
+#
+# NOTE: this dataset's own MATC_Code_Explanation strings don't match the
+# standard WHO ATC letter meanings for 'I' and 'O' (this dataset repurposes
+# them: I = "Antiinflammatory", O = "Lipid regulation" -- both mechanism/
+# action categories, not anatomical ones). The split below is based on the
+# ACTUAL per-code meaning in this dataset (verified against
+# drug_raw['MATC_Code_Explanation']), not the WHO code letter alone:
+#   H  Systemic hormonal preparations       -> action (mechanism)
+#   I  Antiinflammatory                     -> action (mechanism)
+#   J  Antiinfectives for systemic use      -> action (mechanism)
+#   L  Antineoplastic/immunomodulating      -> action (mechanism)
+#   O  Lipid regulation                     -> action (mechanism)
+#   P  Antiparasitic products                -> action (mechanism)
+#   A  Alimentary tract and metabolism      -> organ/system
+#   B  Blood and blood forming organs       -> organ/system
+#   C  Cardiovascular system                -> organ/system
+#   D  Dermatologicals                      -> organ/system
+#   G  Genito-urinary system and sex hormones -> organ/system
+#   M  Musculo-skeletal system              -> organ/system
+#   N  Nervous system                       -> organ/system
+#   R  Respiratory system                   -> organ/system
+#   S  Sensory organs                       -> organ/system
+ACTION_BASED_CODES = "H,I,J,L,O,P"
+ORGAN_BASED_CODES = "A,B,C,D,G,M,N,R,S"
 
 
 def process_drug_dataset_action(drug_raw: pd.DataFrame):

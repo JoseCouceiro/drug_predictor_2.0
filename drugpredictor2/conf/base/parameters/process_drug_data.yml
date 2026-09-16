@@ -8,4 +8,11 @@
 # Use null to include all available codes (minus V which is always excluded).
 # action_based: "J,L,B,A,P,H"
 # organ_based:  "N,C,R,D,G,S,M,O,I"
-atc_subset: "J,L,B,A,P,H"
+# Must stay null for the default (non-prefixed) branch: it feeds X_train/
+# y_drug_train, which train the binary drug/no-drug classifier. Restricting
+# to any ATC subset excludes 'ND' (non-drug) rows entirely, since ND isn't
+# an ATC code — leaving y_drug_train 100% positive with no negative examples
+# to learn from (confirmed bug: classifier predicted ~0.70 for every input,
+# including water). The action_/organ_ prefixed branches use their own
+# hardcoded subsets independently and are unaffected by this parameter.
+atc_subset: null
