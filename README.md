@@ -130,6 +130,41 @@ predict was by far the bigger lever** — getting that split right (both in whic
 codes go where, and in the actual per-code meaning behind this dataset's ATC
 letters) mattered far more than which pretrained backbone was used.
 
+## 5. Sanity check: testing on molecules approved after training
+
+As an out-of-distribution sanity check, 10 real-world drugs approved/in late-stage
+approval in 2026 (`drugpredictor2/data/moleculas_aprobadas_2026_classified.csv`) were
+run through the app (fetched live from PubChem by CID), each hand-labelled with an
+expected action/organ code from its known mechanism/target tissue, and compared
+against the model's predictions:
+
+| Metric | Accuracy |
+|---|---|
+| Action-based, top-1 | 33.3% (3/9; 1 molecule has no clean fit in the 6-class action taxonomy) |
+| Action-based, top-3 | 44.4% |
+| Organ-based, top-1 | 20.0% (2/10) |
+| Organ-based, top-3 | 50.0% |
+| Mean recalibrated drug-probability | 38.6% (all 10 are real approved drugs) |
+
+Substantially below the validation-set macro-F1 (~0.78 action, ~0.67 organ) — expected,
+since these are brand-new 2026 approvals with mechanisms that postdate the training
+data. Splitting the 10 by how chemically novel each one is (data source's own
+"Derivative Scaffold/Next-in-class" vs. "Novel Scaffold/First-in-class" labels)
+sharpens the picture:
+
+| Scaffold type | N | Action top-1 | Organ top-1 |
+|---|---|---|---|
+| Derivative / known chemotype | 7–8 | **42.9%** | **25.0%** |
+| Novel / first-in-class chemotype | 2 | **0%** | **0%** |
+
+The two genuinely first-in-class molecules (Orforglipron, a novel oral non-peptide
+GLP-1 agonist; Oveporexton, an orexin-2 receptor agonist) missed on every metric,
+while derivative/"me-too" compounds (following known BTK/PDE4/JAK/SERD/KRAS-inhibitor
+chemotypes) fared meaningfully better. This is consistent with the model failing where
+it should be expected to fail — on chemistry with no precedent in its training
+distribution — rather than failing randomly. The sample is small (n=10, only 2
+"novel"), so this is a directional signal, not a statistically robust conclusion.
+
 ## How to run
 
 The project is a set of [Kedro](https://kedro.org/) pipelines. Two config parameters
